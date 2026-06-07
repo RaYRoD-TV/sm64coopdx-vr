@@ -113,9 +113,12 @@ static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; 
 // the in-game VR menu.
 static bool sFirstPerson = false;
 
-// Menu panel placement. The flat menu/UI panel is world-locked: it spawns centered in front of your
-// current facing when a menu opens, then stays put so you can turn your head to read across it (the
-// Player/DynOS lists sit on the left of the frame). Re-anchored on each menu entry.
+// Menu panel placement. In-game menus (pause/Player/DynOS) are WORLD-LOCKED: the panel spawns centered
+// on your facing, then stays put so you can turn your head to read across it (the lists sit on the
+// left of the frame). The title/main menu is HEAD-LOCKED instead, so it stays centered and fills your
+// view (a world-locked title panel left empty void around it at boot). pc_main picks per-frame via
+// vr_set_panel_world_lock().
+static bool  sPanelWorldLock   = true;
 static bool  sPanelAnchorValid = false;
 static float sPanelAnchorPos[3] = {0.0f, 0.0f, 0.0f};
 static float sPanelAnchorQy = 0.0f, sPanelAnchorQw = 1.0f; // yaw-only orientation captured at menu open
@@ -752,6 +755,14 @@ void vr_end_overlay(bool sky) {
 // submit it as a single large OPAQUE head-locked quad (no projection layer, no dome, no HUD).
 void vr_set_panel_mode(bool on) { sPanelMode = on; }
 
+// Choose how the flat menu panel is placed this frame: true = world-locked (stays put, look around it;
+// for in-game lists like Player/DynOS), false = head-locked (centered, fills view; for the title/main
+// menu). Changing it drops the world-lock anchor so the next world-locked menu re-centers.
+void vr_set_panel_world_lock(bool on) {
+    if (on != sPanelWorldLock) { sPanelAnchorValid = false; }
+    sPanelWorldLock = on;
+}
+
 // Acquire + bind the HUD swapchain as the flat-panel render target (mirrors vr_begin_overlay(false)
 // but flagged as panel mode). Returns false to skip if the session isn't ready.
 bool vr_begin_panel(void) {
@@ -783,20 +794,40 @@ void vr_submit(void) {
         // ONLY layer - one large OPAQUE quad. The flat frame is SM64 4:3 centered inside the 16:9
         // swapchain, so crop to the centered 4:3 region and size the quad 4:3 (no stretch, no bars).
         if (sHudReady) {
-            // Show the WHOLE 16:9 frame. coopdx renders its menus full-width (the Player/DynOS lists sit
-            // at the far left of the frame), so cropping to a centered 4:3 region was cutting their left
-            // edge off. Present the full swapchain and size the quad 16:9 -> nothing cut, no stretch.
             hudQuad.layerFlags = 0;                                 // OPAQUE virtual screen
             hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             hudQuad.subImage.swapchain = sHud.handle;
-            hudQuad.subImage.imageRect.offset.x = 0;
-            hudQuad.subImage.imageRect.offset.y = 0;
-            hudQuad.subImage.imageRect.extent.width  = (int32_t)sHud.w;
-            hudQuad.subImage.imageRect.extent.height = (int32_t)sHud.h;
-            hudQuad.size.width  = sMenuSize;                        // virtual screen width
-            hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // match the frame aspect (16:9)
+            if (sPanelWorldLock) {
+                // In-game menus: their lists run to the far left/right of the frame, so show the WHOLE
+                // 16:9 swapchain (no crop) on a 16:9 quad - nothing cut.
+                hudQuad.subImage.imageRect.offset.x = 0;
+                hudQuad.subImage.imageRect.offset.y = 0;
+                hudQuad.subImage.imageRect.extent.width  = (int32_t)sHud.w;
+                hudQuad.subImage.imageRect.extent.height = (int32_t)sHud.h;
+                hudQuad.size.width  = sMenuSize;
+                hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // 16:9
+            } else {
+                // Title/main menu: content is centered in the 4:3 region. Crop to it and use a taller
+                // 4:3 quad so it fills your view with no empty void top/bottom (the original look).
+                const int32_t cropH = (int32_t)sHud.h;
+                const int32_t cropW = (int32_t)(sHud.h * 4 / 3);
+                const int32_t cropX = ((int32_t)sHud.w - cropW) / 2;
+                hudQuad.subImage.imageRect.offset.x = cropX;
+                hudQuad.subImage.imageRect.offset.y = 0;
+                hudQuad.subImage.imageRect.extent.width  = cropW;
+                hudQuad.subImage.imageRect.extent.height = cropH;
+                hudQuad.size.width  = sMenuSize;
+                hudQuad.size.height = sMenuSize * 3.0f / 4.0f; // 4:3
+            }
 
-            if (sLocalSpace != XR_NULL_HANDLE) {
+            if (!sPanelWorldLock && sViewSpace != XR_NULL_HANDLE) {
+                // Head-locked: centered in front of you, moves with your head so it always fills your
+                // view with no empty void around it. Used for the title/main-menu screens.
+                hudQuad.space = sViewSpace;
+                hudQuad.pose.orientation.w = 1.0f;
+                hudQuad.pose.position.z = -sMenuDist;
+                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
+            } else if (sLocalSpace != XR_NULL_HANDLE) {
                 // World-locked, but smart about it: the panel re-anchors to the head's yaw-only pose
                 // (1) until the runtime reports a real tracked pose - so first boot doesn't freeze the
                 //     panel to an un-tracked/zero pose, and
@@ -915,6 +946,7 @@ bool  vr_begin_eye(int e)    { (void)e; return false; }
 void  vr_end_eye(int e)      { (void)e; }
 void  vr_submit(void)        {}
 void  vr_set_panel_mode(bool on) { (void)on; }
+void  vr_set_panel_world_lock(bool on) { (void)on; }
 bool  vr_begin_panel(void)   { return false; }
 void  vr_end_panel(void)     {}
 void  vr_shutdown(void)      {}

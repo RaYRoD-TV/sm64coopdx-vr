@@ -343,6 +343,12 @@ void produce_interpolation_frames_and_delay(void) {
                 // sole large opaque head-locked quad. Every menu/UI screen looks like the desktop
                 // game, floating on a VR screen.
                 vr_set_panel_mode(true);
+                // Title/main-menu screens are head-locked (centered, fill the view); in-game menus
+                // (pause, Player, DynOS) are world-locked so you can turn your head to read them.
+                {
+                    extern bool gDjuiInMainMenu; // pc/djui/djui.h
+                    vr_set_panel_world_lock(!gDjuiInMainMenu);
+                }
                 if (vr_begin_panel()) {
                     gfx_run_dl_vr_panel(vrDl, vr_overlay_width(), vr_overlay_height());
                     vr_end_panel();

@@ -1227,7 +1227,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..ee74111 100644
+index 0d4f9f7..7933f0f 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1296,7 +1296,7 @@ index 0d4f9f7..ee74111 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +321,55 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +321,61 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1322,6 +1322,12 @@ index 0d4f9f7..ee74111 100644
 +                // sole large opaque head-locked quad. Every menu/UI screen looks like the desktop
 +                // game, floating on a VR screen.
 +                vr_set_panel_mode(true);
++                // Title/main-menu screens are head-locked (centered, fill the view); in-game menus
++                // (pause, Player, DynOS) are world-locked so you can turn your head to read them.
++                {
++                    extern bool gDjuiInMainMenu; // pc/djui/djui.h
++                    vr_set_panel_world_lock(!gDjuiInMainMenu);
++                }
 +                if (vr_begin_panel()) {
 +                    gfx_run_dl_vr_panel(vrDl, vr_overlay_width(), vr_overlay_height());
 +                    vr_end_panel();
@@ -1352,7 +1358,7 @@ index 0d4f9f7..ee74111 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +528,7 @@ void game_deinit(void) {
+@@ -452,6 +534,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1360,7 +1366,7 @@ index 0d4f9f7..ee74111 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +581,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +587,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -1378,10 +1384,10 @@ index 0d4f9f7..ee74111 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..e1552b7
+index 0000000..b688b9e
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,922 @@
+@@ -0,0 +1,954 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -1497,9 +1503,12 @@ index 0000000..e1552b7
 +// the in-game VR menu.
 +static bool sFirstPerson = false;
 +
-+// Menu panel placement. The flat menu/UI panel is world-locked: it spawns centered in front of your
-+// current facing when a menu opens, then stays put so you can turn your head to read across it (the
-+// Player/DynOS lists sit on the left of the frame). Re-anchored on each menu entry.
++// Menu panel placement. In-game menus (pause/Player/DynOS) are WORLD-LOCKED: the panel spawns centered
++// on your facing, then stays put so you can turn your head to read across it (the lists sit on the
++// left of the frame). The title/main menu is HEAD-LOCKED instead, so it stays centered and fills your
++// view (a world-locked title panel left empty void around it at boot). pc_main picks per-frame via
++// vr_set_panel_world_lock().
++static bool  sPanelWorldLock   = true;
 +static bool  sPanelAnchorValid = false;
 +static float sPanelAnchorPos[3] = {0.0f, 0.0f, 0.0f};
 +static float sPanelAnchorQy = 0.0f, sPanelAnchorQw = 1.0f; // yaw-only orientation captured at menu open
@@ -2136,6 +2145,14 @@ index 0000000..e1552b7
 +// submit it as a single large OPAQUE head-locked quad (no projection layer, no dome, no HUD).
 +void vr_set_panel_mode(bool on) { sPanelMode = on; }
 +
++// Choose how the flat menu panel is placed this frame: true = world-locked (stays put, look around it;
++// for in-game lists like Player/DynOS), false = head-locked (centered, fills view; for the title/main
++// menu). Changing it drops the world-lock anchor so the next world-locked menu re-centers.
++void vr_set_panel_world_lock(bool on) {
++    if (on != sPanelWorldLock) { sPanelAnchorValid = false; }
++    sPanelWorldLock = on;
++}
++
 +// Acquire + bind the HUD swapchain as the flat-panel render target (mirrors vr_begin_overlay(false)
 +// but flagged as panel mode). Returns false to skip if the session isn't ready.
 +bool vr_begin_panel(void) {
@@ -2167,20 +2184,40 @@ index 0000000..e1552b7
 +        // ONLY layer - one large OPAQUE quad. The flat frame is SM64 4:3 centered inside the 16:9
 +        // swapchain, so crop to the centered 4:3 region and size the quad 4:3 (no stretch, no bars).
 +        if (sHudReady) {
-+            // Show the WHOLE 16:9 frame. coopdx renders its menus full-width (the Player/DynOS lists sit
-+            // at the far left of the frame), so cropping to a centered 4:3 region was cutting their left
-+            // edge off. Present the full swapchain and size the quad 16:9 -> nothing cut, no stretch.
 +            hudQuad.layerFlags = 0;                                 // OPAQUE virtual screen
 +            hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
 +            hudQuad.subImage.swapchain = sHud.handle;
-+            hudQuad.subImage.imageRect.offset.x = 0;
-+            hudQuad.subImage.imageRect.offset.y = 0;
-+            hudQuad.subImage.imageRect.extent.width  = (int32_t)sHud.w;
-+            hudQuad.subImage.imageRect.extent.height = (int32_t)sHud.h;
-+            hudQuad.size.width  = sMenuSize;                        // virtual screen width
-+            hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // match the frame aspect (16:9)
++            if (sPanelWorldLock) {
++                // In-game menus: their lists run to the far left/right of the frame, so show the WHOLE
++                // 16:9 swapchain (no crop) on a 16:9 quad - nothing cut.
++                hudQuad.subImage.imageRect.offset.x = 0;
++                hudQuad.subImage.imageRect.offset.y = 0;
++                hudQuad.subImage.imageRect.extent.width  = (int32_t)sHud.w;
++                hudQuad.subImage.imageRect.extent.height = (int32_t)sHud.h;
++                hudQuad.size.width  = sMenuSize;
++                hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // 16:9
++            } else {
++                // Title/main menu: content is centered in the 4:3 region. Crop to it and use a taller
++                // 4:3 quad so it fills your view with no empty void top/bottom (the original look).
++                const int32_t cropH = (int32_t)sHud.h;
++                const int32_t cropW = (int32_t)(sHud.h * 4 / 3);
++                const int32_t cropX = ((int32_t)sHud.w - cropW) / 2;
++                hudQuad.subImage.imageRect.offset.x = cropX;
++                hudQuad.subImage.imageRect.offset.y = 0;
++                hudQuad.subImage.imageRect.extent.width  = cropW;
++                hudQuad.subImage.imageRect.extent.height = cropH;
++                hudQuad.size.width  = sMenuSize;
++                hudQuad.size.height = sMenuSize * 3.0f / 4.0f; // 4:3
++            }
 +
-+            if (sLocalSpace != XR_NULL_HANDLE) {
++            if (!sPanelWorldLock && sViewSpace != XR_NULL_HANDLE) {
++                // Head-locked: centered in front of you, moves with your head so it always fills your
++                // view with no empty void around it. Used for the title/main-menu screens.
++                hudQuad.space = sViewSpace;
++                hudQuad.pose.orientation.w = 1.0f;
++                hudQuad.pose.position.z = -sMenuDist;
++                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
++            } else if (sLocalSpace != XR_NULL_HANDLE) {
 +                // World-locked, but smart about it: the panel re-anchors to the head's yaw-only pose
 +                // (1) until the runtime reports a real tracked pose - so first boot doesn't freeze the
 +                //     panel to an un-tracked/zero pose, and
@@ -2299,6 +2336,7 @@ index 0000000..e1552b7
 +void  vr_end_eye(int e)      { (void)e; }
 +void  vr_submit(void)        {}
 +void  vr_set_panel_mode(bool on) { (void)on; }
++void  vr_set_panel_world_lock(bool on) { (void)on; }
 +bool  vr_begin_panel(void)   { return false; }
 +void  vr_end_panel(void)     {}
 +void  vr_shutdown(void)      {}
@@ -2306,10 +2344,10 @@ index 0000000..e1552b7
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..b0dcb6f
+index 0000000..1740aad
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,72 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -2371,6 +2409,7 @@ index 0000000..b0dcb6f
 +// FLATSCREEN-ON-A-PANEL: for ALL non-gameplay screens, render the normal flat frame once into the
 +// panel swapchain and present it on one large opaque head-locked quad (no diorama/dome/HUD split).
 +void  vr_set_panel_mode(bool on); // mark this frame as a flat panel (vr_submit emits panel-only)
++void  vr_set_panel_world_lock(bool on); // true=world-locked (in-game menus), false=head-locked (title/main menu)
 +bool  vr_begin_panel(void);       // acquire + bind the panel render target (the HUD swapchain)
 +void  vr_end_panel(void);         // release the panel image (submitted as the sole opaque quad)
 +
