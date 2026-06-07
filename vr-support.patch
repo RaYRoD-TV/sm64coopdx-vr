@@ -50,16 +50,15 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..2d3761c 100644
+index 16ae934..745ea78 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,71 @@
+@@ -1,22 +1,70 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
 -sm64coopdx is an online multiplayer project for the Super Mario 64 PC port that synchronizes all entities and every level for multiple players. The project was started by the Coop Deluxe Team. The purpose is to actively maintain and improve, but also continue sm64ex-coop, created by djoslin0. More features, customization, and power to the Lua API allow modders and players to enjoy Super Mario 64 more than ever!
-+Super Mario 64 in VR, built on the sm64coopdx PC port. With a headset on, the game sits in front of
-+you as a small 3D diorama you can lean around and look into, with the sky wrapped around the room.
++Super Mario 64 in VR, built on the sm64coopdx PC port. With a headset on, the game renders in immersive VR. You can lean around and look into the world.
 +With no headset it just runs as the normal flatscreen game. Same exe, it works out which one you
 +want on its own.
  
@@ -110,7 +109,7 @@ index 16ae934..2d3761c 100644
 +
 +### VR menu
 +
-+All the VR settings are in-game. Pause and open the VR button, right after Mod Menu:
++All the VR settings are in-game. Pause and open the VR button, right after Cheats:
 +
 +![VR button in the pause menu](VR_Menu_Preview/image1.png)
 +
@@ -393,6 +392,41 @@ index 0000000..d9b0d6c
 +echo.
 +echo === Game exited. Scroll up to review any [VR] lines. ===
 +pause
+diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
+index 4bfed22..96616b0 100644
+--- a/src/game/first_person_cam.c
++++ b/src/game/first_person_cam.c
+@@ -63,6 +63,12 @@ static void first_person_camera_update(void) {
+     struct MarioState *m = &gMarioStates[0];
+     f32 sensX = 0.3f * camera_config_get_x_sensitivity();
+     f32 sensY = 0.4f * camera_config_get_y_sensitivity();
++    // Honor the camera Invert X/Y settings, the same way third-person (bettercamera) does via
++    // newcam_ivrt(): invertX defaults false, invertY defaults true. Folding these into the yaw/pitch
++    // below keeps the current default feel (invertY=true -> pitch stays "-=") while making the menu
++    // toggle actually flip the axis in first-person, matching the third-person views.
++    f32 invX = camera_config_is_x_inverted() ? -1.f : 1.f;
++    f32 invY = camera_config_is_y_inverted() ? -1.f : 1.f;
+ 
+     if (mouse_relative_enabled) {
+         // hack: make c buttons work for moving the camera
+@@ -77,7 +83,7 @@ static void first_person_camera_update(void) {
+ 
+         // update pitch
+         if (!gFirstPersonCamera.forcePitch) {
+-            gFirstPersonCamera.pitch -= sensY * (extStickY - 1.5f * mouse_y);
++            gFirstPersonCamera.pitch += invY * sensY * (extStickY - 1.5f * mouse_y);
+             gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
+         }
+ 
+@@ -86,7 +92,7 @@ static void first_person_camera_update(void) {
+             if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
+                 gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
+             } else {
+-                gFirstPersonCamera.yaw += sensX * (extStickX - 1.5f * mouse_x);
++                gFirstPersonCamera.yaw += invX * sensX * (extStickX - 1.5f * mouse_x);
+             }
+         }
+     }
 diff --git a/src/game/level_update.c b/src/game/level_update.c
 index 02b8216..57639a9 100644
 --- a/src/game/level_update.c
@@ -785,6 +819,52 @@ index 2088913..4d86ae5 100644
  
  // display settings
  enum GraphicsBackend configGraphicsBackend        = GAPI_GL;
+diff --git a/src/pc/djui/djui_cursor.c b/src/pc/djui/djui_cursor.c
+index f2c15c8..c44d8e5 100644
+--- a/src/pc/djui/djui_cursor.c
++++ b/src/pc/djui/djui_cursor.c
+@@ -135,6 +135,14 @@ static void djui_cursor_update_position(void) {
+         sCursorMouseControlled = false;
+         sSavedMouseX = mouse_window_x;
+         sSavedMouseY = mouse_window_y;
++    } else if (mouse_window_x <= -1000 || mouse_window_y <= -1000) {
++        // Mouse is outside the window, or the window lost focus (constant in VR, where the HMD
++        // compositor is foreground). Don't let this invalid position read as a big "mouse moved"
++        // jump that flips us into mouse-control and snaps the cursor to a window edge (the reported
++        // "cursor jumps to the right and sticks"). Keep the baseline current so the next genuine
++        // in-window move is measured from where the mouse actually re-enters.
++        sSavedMouseX = mouse_window_x;
++        sSavedMouseY = mouse_window_y;
+     } else if (!sCursorMouseControlled || (sMouseCursor && !sMouseCursor->base.visible)) {
+         f32 dist = sqrtf(powf(mouse_window_x - sSavedMouseX, 2) + powf(mouse_window_y - sSavedMouseY, 2));
+         if (dist > 5) {
+@@ -147,6 +155,10 @@ static void djui_cursor_update_position(void) {
+     if (sCursorMouseControlled) {
+         gCursorX = mouse_window_x / djui_gfx_get_scale();
+         gCursorY = mouse_window_y / djui_gfx_get_scale();
++        // The mouse owns the cursor this frame; don't let a resting controller stick (Quest 3 sticks
++        // carry ~0.2 bias) also drive menu navigation and fight the mouse.
++        gInteractablePad.stick_x = 0;
++        gInteractablePad.stick_y = 0;
+     } else if (sInputControlledBase != NULL) {
+         djui_cursor_base_hover_location(sInputControlledBase, &gCursorX, &gCursorY);
+     }
+diff --git a/src/pc/djui/djui_interactable.c b/src/pc/djui/djui_interactable.c
+index 9eecd23..09baf14 100644
+--- a/src/pc/djui/djui_interactable.c
++++ b/src/pc/djui/djui_interactable.c
+@@ -383,7 +383,10 @@ void djui_interactable_update_pad(void) {
+             case PAD_HOLD_DIR_RIGHT: pad->stick_x =  64; pad->stick_y =   0; break;
+             default: break;
+         }
+-    } else if (pad->stick_x == 0 && pad->stick_y == 0) {
++    } else if (abs(pad->stick_x) < 32 && abs(pad->stick_y) < 32) {
++        // Deadzone: a resting or slightly-biased stick (Quest 3 sticks carry ~0.2 bias) reads as
++        // neutral so it can't slowly drift menu navigation. 32 matches the slider's own focus gate
++        // and is below the 64 the dpad injects above, so dpad nav and slider editing are unaffected.
+         padHoldDirection = PAD_HOLD_DIR_NONE;
+     } else if (abs(pad->stick_x) > abs(pad->stick_y)) {
+         padHoldDirection = (pad->stick_x < 0) ? PAD_HOLD_DIR_LEFT : PAD_HOLD_DIR_RIGHT;
 diff --git a/src/pc/djui/djui_panel.c b/src/pc/djui/djui_panel.c
 index b25a251..c505d39 100644
 --- a/src/pc/djui/djui_panel.c

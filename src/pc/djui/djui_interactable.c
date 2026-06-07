@@ -383,7 +383,10 @@ void djui_interactable_update_pad(void) {
             case PAD_HOLD_DIR_RIGHT: pad->stick_x =  64; pad->stick_y =   0; break;
             default: break;
         }
-    } else if (pad->stick_x == 0 && pad->stick_y == 0) {
+    } else if (abs(pad->stick_x) < 32 && abs(pad->stick_y) < 32) {
+        // Deadzone: a resting or slightly-biased stick (Quest 3 sticks carry ~0.2 bias) reads as
+        // neutral so it can't slowly drift menu navigation. 32 matches the slider's own focus gate
+        // and is below the 64 the dpad injects above, so dpad nav and slider editing are unaffected.
         padHoldDirection = PAD_HOLD_DIR_NONE;
     } else if (abs(pad->stick_x) > abs(pad->stick_y)) {
         padHoldDirection = (pad->stick_x < 0) ? PAD_HOLD_DIR_LEFT : PAD_HOLD_DIR_RIGHT;

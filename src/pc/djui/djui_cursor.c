@@ -135,6 +135,14 @@ static void djui_cursor_update_position(void) {
         sCursorMouseControlled = false;
         sSavedMouseX = mouse_window_x;
         sSavedMouseY = mouse_window_y;
+    } else if (mouse_window_x <= -1000 || mouse_window_y <= -1000) {
+        // Mouse is outside the window, or the window lost focus (constant in VR, where the HMD
+        // compositor is foreground). Don't let this invalid position read as a big "mouse moved"
+        // jump that flips us into mouse-control and snaps the cursor to a window edge (the reported
+        // "cursor jumps to the right and sticks"). Keep the baseline current so the next genuine
+        // in-window move is measured from where the mouse actually re-enters.
+        sSavedMouseX = mouse_window_x;
+        sSavedMouseY = mouse_window_y;
     } else if (!sCursorMouseControlled || (sMouseCursor && !sMouseCursor->base.visible)) {
         f32 dist = sqrtf(powf(mouse_window_x - sSavedMouseX, 2) + powf(mouse_window_y - sSavedMouseY, 2));
         if (dist > 5) {
@@ -147,6 +155,10 @@ static void djui_cursor_update_position(void) {
     if (sCursorMouseControlled) {
         gCursorX = mouse_window_x / djui_gfx_get_scale();
         gCursorY = mouse_window_y / djui_gfx_get_scale();
+        // The mouse owns the cursor this frame; don't let a resting controller stick (Quest 3 sticks
+        // carry ~0.2 bias) also drive menu navigation and fight the mouse.
+        gInteractablePad.stick_x = 0;
+        gInteractablePad.stick_y = 0;
     } else if (sInputControlledBase != NULL) {
         djui_cursor_base_hover_location(sInputControlledBase, &gCursorX, &gCursorY);
     }

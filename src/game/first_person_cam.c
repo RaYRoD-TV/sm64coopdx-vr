@@ -63,6 +63,12 @@ static void first_person_camera_update(void) {
     struct MarioState *m = &gMarioStates[0];
     f32 sensX = 0.3f * camera_config_get_x_sensitivity();
     f32 sensY = 0.4f * camera_config_get_y_sensitivity();
+    // Honor the camera Invert X/Y settings, the same way third-person (bettercamera) does via
+    // newcam_ivrt(): invertX defaults false, invertY defaults true. Folding these into the yaw/pitch
+    // below keeps the current default feel (invertY=true -> pitch stays "-=") while making the menu
+    // toggle actually flip the axis in first-person, matching the third-person views.
+    f32 invX = camera_config_is_x_inverted() ? -1.f : 1.f;
+    f32 invY = camera_config_is_y_inverted() ? -1.f : 1.f;
 
     if (mouse_relative_enabled) {
         // hack: make c buttons work for moving the camera
@@ -77,7 +83,7 @@ static void first_person_camera_update(void) {
 
         // update pitch
         if (!gFirstPersonCamera.forcePitch) {
-            gFirstPersonCamera.pitch -= sensY * (extStickY - 1.5f * mouse_y);
+            gFirstPersonCamera.pitch += invY * sensY * (extStickY - 1.5f * mouse_y);
             gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
         }
 
@@ -86,7 +92,7 @@ static void first_person_camera_update(void) {
             if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
                 gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
             } else {
-                gFirstPersonCamera.yaw += sensX * (extStickX - 1.5f * mouse_x);
+                gFirstPersonCamera.yaw += invX * sensX * (extStickX - 1.5f * mouse_x);
             }
         }
     }
