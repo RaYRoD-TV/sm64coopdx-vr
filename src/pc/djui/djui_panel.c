@@ -19,6 +19,13 @@ bool djui_panel_is_active(void) {
     return (sPanelList != NULL);
 }
 
+// True when the active menu panel is left-docked (Mods, lobbies, Player, DynOS) rather than centered.
+// Centered panels get hAlign == DJUI_HALIGN_CENTER in djui_panel_menu_create; left-docked ones keep the
+// default (LEFT). VR uses this to show such menus on the full-width panel so their left edge isn't cut.
+bool djui_panel_active_is_left_docked(void) {
+    return (sPanelList != NULL) && (sPanelList->base != NULL) && (sPanelList->base->hAlign != DJUI_HALIGN_CENTER);
+}
+
 static struct DjuiBase* djui_panel_find_first_interactable(struct DjuiBaseChild* child) {
     while (child) {
         if (child->base->interactable && child->base->interactable->enabled) {

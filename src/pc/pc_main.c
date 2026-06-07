@@ -441,12 +441,14 @@ void produce_interpolation_frames_and_delay(void) {
                 // sole large opaque head-locked quad. Every menu/UI screen looks like the desktop
                 // game, floating on a VR screen.
                 vr_set_panel_mode(true);
-                // Every menu is world-locked so you can turn your head to look around it. Only the
-                // crop differs: in-game menus (pause, Player, DynOS) show the full 16:9 frame (their
-                // lists run to the edges); the title/main menu shows the centered 4:3 region (no void).
+                // Every menu is world-locked so you can turn your head to look around it. The crop is
+                // driven by how the screen is laid out: left-docked menus (Mods, lobbies, Player, DynOS)
+                // and any non-panel screen (act/star select, dialogs) use the full 16:9 frame so nothing
+                // is cut; centered panels (title, options, pause) use the 4:3 region so there's no void.
                 {
-                    extern bool gDjuiInMainMenu; // pc/djui/djui.h
-                    vr_set_panel_full_frame(!gDjuiInMainMenu);
+                    extern bool djui_panel_active_is_left_docked(void); // pc/djui/djui_panel.h
+                    extern bool djui_panel_is_active(void);
+                    vr_set_panel_full_frame(djui_panel_active_is_left_docked() || !djui_panel_is_active());
                 }
                 if (vr_begin_panel()) {
                     gfx_run_dl_vr_panel(vrDl, vr_overlay_width(), vr_overlay_height());

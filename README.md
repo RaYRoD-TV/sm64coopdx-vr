@@ -29,15 +29,28 @@ into your existing folder.
 
 ## Controls
 
-You play with whatever sm64coopdx normally takes: a gamepad (DualSense, DS4, Xbox, etc.) or mouse
-and keyboard. In VR your head moves the view on top of that. Proper VR motion-controller support
-isn't done yet, so for now use a controller or the keyboard the same way you would in the flat game.
+You play with the same input sm64coopdx normally uses:
 
-All the VR settings are in-game. Pause and open VR (the button right after Mod Menu). From there you
-set view distance, size, height, stereo depth, head motion, first person, and camera anti-clip, and
-there's a Reset to Default button.
+- Gamepad: DualSense (PS5), DualShock 4 (PS4), Xbox, Switch Pro, or any other SDL-compatible
+  controller, wired or over Bluetooth. It uses your existing coopdx control bindings.
+- Mouse and keyboard.
 
-One keyboard shortcut: F10 cycles the view (diorama / close-up / first-person).
+In VR your head moves the view on top of that. Real VR motion-controller support isn't done yet, so
+for now movement and buttons come from the gamepad or keyboard exactly like the flat game, and the
+headset just drives where you look.
+
+### VR menu
+
+All the VR settings are in-game. Pause and open the VR button, right after Mod Menu:
+
+![VR button in the pause menu](VR_Menu_Preview/image1.png)
+
+It has view distance, size and height, stereo depth, head motion, first person, and camera anti-clip,
+plus a Reset to Default button:
+
+![VR settings panel](VR_Menu_Preview/image2.png)
+
+The one keyboard shortcut is F10, which cycles the view (diorama / close-up / first-person).
 
 ## Building from source
 
