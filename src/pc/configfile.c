@@ -79,7 +79,7 @@ ConfigWindow configWindow = {
     .msaa = 0,
 };
 
-ConfigStick configStick = { 0 };
+ConfigStick configStick = { .invertRightY = true }; // right stick (camera) inverted by default
 
 // display settings
 enum GraphicsBackend configGraphicsBackend        = GAPI_GL;

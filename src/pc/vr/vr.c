@@ -112,11 +112,9 @@ static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; 
 // the in-game VR menu.
 static bool sFirstPerson = false;
 
-// Menu panel placement. When sMenuFollowHead is true (default) the flat menu/UI panel is head-locked
-// (always centered in front of you). When false it is world-locked: it spawns centered in front of your
-// current facing when the menu opens, then stays put so you can turn your head to look across it (useful
-// for the Player/DynOS lists that sit on the left of the frame). Re-anchored on each menu entry.
-static bool  sMenuFollowHead   = true;
+// Menu panel placement. The flat menu/UI panel is world-locked: it spawns centered in front of your
+// current facing when a menu opens, then stays put so you can turn your head to read across it (the
+// Player/DynOS lists sit on the left of the frame). Re-anchored on each menu entry.
 static bool  sPanelAnchorValid = false;
 static float sPanelAnchorPos[3] = {0.0f, 0.0f, 0.0f};
 static float sPanelAnchorQy = 0.0f, sPanelAnchorQw = 1.0f; // yaw-only orientation captured at menu open
@@ -592,8 +590,6 @@ float vr_get_menu_dist(void)         { return sMenuDist; }
 void  vr_set_menu_dist(float v)      { sMenuDist = v; }
 float vr_get_menu_size(void)         { return sMenuSize; }
 void  vr_set_menu_size(float v)      { sMenuSize = v; }
-bool  vr_get_menu_follow_head(void)  { return sMenuFollowHead; }
-void  vr_set_menu_follow_head(bool v){ sMenuFollowHead = v; sPanelAnchorValid = false; }
 float vr_get_diorama_dist(void)      { return sDioramaDist; }
 void  vr_set_diorama_dist(float v)   { sDioramaDist = v; }
 float vr_get_diorama_scale(void)     { return sDioramaScale; }
@@ -605,43 +601,16 @@ void  vr_set_first_person(bool on) {
     else if (sFirstPerson) { vr_apply_preset(1); }      // back to Close-up
 }
 
-// Live diorama tuning (dev): F10 cycles presets; F1/F2 scale, F3/F4 distance,
-// F5/F6 height, F8/F9 stereo, F7 reset to the current preset.
+// The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
+// is tuned from the in-game Options -> VR menu.
 static void vr_poll_tuning_keys(void) {
     const Uint8 *ks = SDL_GetKeyboardState(NULL);
     if (!ks) return;
 
-    // F10 cycles through the presets (edge-triggered so a tap advances one).
     static bool prevCycle = false;
     bool cyc = ks[SDL_SCANCODE_F10] != 0;
     if (cyc && !prevCycle) vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS);
     prevCycle = cyc;
-
-    bool changed = false;
-    if (ks[SDL_SCANCODE_F1]) { sDioramaScale  *= 0.98f; changed = true; } // bigger world
-    if (ks[SDL_SCANCODE_F2]) { sDioramaScale  *= 1.02f; changed = true; } // smaller world
-    if (ks[SDL_SCANCODE_F3]) { sDioramaDist   -= 0.01f; changed = true; }
-    if (ks[SDL_SCANCODE_F4]) { sDioramaDist   += 0.01f; changed = true; }
-    if (ks[SDL_SCANCODE_F5]) { sDioramaHeight -= 0.01f; changed = true; }
-    if (ks[SDL_SCANCODE_F6]) { sDioramaHeight += 0.01f; changed = true; }
-    if (ks[SDL_SCANCODE_F8]) { sStereoScale   -= 0.01f; changed = true; } // gentler stereo (less cross-eye)
-    if (ks[SDL_SCANCODE_F9]) { sStereoScale   += 0.01f; changed = true; } // stronger stereo (more depth)
-    if (ks[SDL_SCANCODE_LEFTBRACKET])  { sHeadScale -= 0.02f; changed = true; } // [  steadier (less 6DoF parallax)
-    if (ks[SDL_SCANCODE_RIGHTBRACKET]) { sHeadScale += 0.02f; changed = true; } // ]  more 6DoF parallax
-    if (ks[SDL_SCANCODE_F7]) { vr_apply_preset(sCurrentPreset); sHeadRestSet = false; sHeadWarmup = 0; } // reset preset + recenter 6DoF
-    if (sDioramaScale < 30.0f)     sDioramaScale = 30.0f;
-    if (sDioramaScale > 100000.0f) sDioramaScale = 100000.0f;
-    if (sStereoScale < 0.0f) sStereoScale = 0.0f;
-    if (sStereoScale > 4.0f) sStereoScale = 4.0f;
-    if (sHeadScale < 0.0f) sHeadScale = 0.0f;
-    if (sHeadScale > 1.5f) sHeadScale = 1.5f;
-    if (changed) {
-        vr_write_tune_file(); // keep vr_tune.txt current so I can read the values back
-        static int throttle = 0;
-        if ((throttle++ % 15) == 0)
-            printf("[VR] tune: scale=%.0f dist=%.2f height=%.2f stereo=%.2f head=%.2f\n",
-                sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, sHeadScale);
-    }
 }
 
 void vr_begin_frame(void) {
@@ -796,29 +765,23 @@ void vr_submit(void) {
         // ONLY layer - one large OPAQUE quad. The flat frame is SM64 4:3 centered inside the 16:9
         // swapchain, so crop to the centered 4:3 region and size the quad 4:3 (no stretch, no bars).
         if (sHudReady) {
-            const int32_t cropH = (int32_t)sHud.h;                 // full height (1080)
-            const int32_t cropW = (int32_t)(sHud.h * 4 / 3);       // centered 4:3 width (1440)
-            const int32_t cropX = ((int32_t)sHud.w - cropW) / 2;   // x offset (240)
+            // Show the WHOLE 16:9 frame. coopdx renders its menus full-width (the Player/DynOS lists sit
+            // at the far left of the frame), so cropping to a centered 4:3 region was cutting their left
+            // edge off. Present the full swapchain and size the quad 16:9 -> nothing cut, no stretch.
             hudQuad.layerFlags = 0;                                 // OPAQUE virtual screen
             hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             hudQuad.subImage.swapchain = sHud.handle;
-            hudQuad.subImage.imageRect.offset.x = cropX;
+            hudQuad.subImage.imageRect.offset.x = 0;
             hudQuad.subImage.imageRect.offset.y = 0;
-            hudQuad.subImage.imageRect.extent.width  = cropW;
-            hudQuad.subImage.imageRect.extent.height = cropH;
+            hudQuad.subImage.imageRect.extent.width  = (int32_t)sHud.w;
+            hudQuad.subImage.imageRect.extent.height = (int32_t)sHud.h;
             hudQuad.size.width  = sMenuSize;                        // virtual screen width
-            hudQuad.size.height = sMenuSize * 3.0f / 4.0f;          // 4:3 -> no stretch
+            hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // match the frame aspect (16:9)
 
-            if (sMenuFollowHead && sViewSpace != XR_NULL_HANDLE) {
-                // Head-locked: always centered in front of you (default).
-                hudQuad.space = sViewSpace;
-                hudQuad.pose.orientation.w = 1.0f;
-                hudQuad.pose.position.z = -sMenuDist;
-                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
-            } else if (sLocalSpace != XR_NULL_HANDLE) {
-                // World-locked ("look around menus"): capture the head's yaw-only pose when the menu
-                // opens so the panel spawns dead-centered on your current facing, then stays put so
-                // you can turn your head to read the left/right of it.
+            if (sLocalSpace != XR_NULL_HANDLE) {
+                // World-locked: capture the head's yaw-only pose when the menu opens so the panel spawns
+                // dead-centered on your current facing, then stays put so you can turn your head to read
+                // the left/right of it (the Player/DynOS lists). Re-anchors each time a menu opens.
                 if (!sPanelAnchorValid && sViewsValid) {
                     sPanelAnchorPos[0] = 0.5f * (sViews[0].pose.position.x + sViews[1].pose.position.x);
                     sPanelAnchorPos[1] = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
@@ -908,7 +871,6 @@ bool  vr_first_person_active(void) { return false; }
 void  vr_set_first_person(bool on) { (void)on; }
 float vr_get_menu_dist(void)         { return 0.0f; } void vr_set_menu_dist(float v)     { (void)v; }
 float vr_get_menu_size(void)         { return 0.0f; } void vr_set_menu_size(float v)     { (void)v; }
-bool  vr_get_menu_follow_head(void)  { return true; } void vr_set_menu_follow_head(bool v){ (void)v; }
 float vr_get_diorama_dist(void)      { return 0.0f; } void vr_set_diorama_dist(float v)  { (void)v; }
 float vr_get_diorama_scale(void)     { return 0.0f; } void vr_set_diorama_scale(float v) { (void)v; }
 float vr_get_stereo(void)            { return 0.0f; } void vr_set_stereo(float v)        { (void)v; }

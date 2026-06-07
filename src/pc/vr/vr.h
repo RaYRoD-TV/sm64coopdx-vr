@@ -25,7 +25,6 @@ bool  vr_first_person_active(void);
 void  vr_set_first_person(bool on);     // toggle the first-person preset (life-size, eye at Mario's head)
 float vr_get_menu_dist(void);    void vr_set_menu_dist(float v);    // flat menu panel distance (meters)
 float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu panel width (meters)
-bool  vr_get_menu_follow_head(void); void vr_set_menu_follow_head(bool v); // true=head-locked, false=world-locked
 float vr_get_diorama_dist(void); void vr_set_diorama_dist(float v); // diorama anchor distance (meters)
 float vr_get_diorama_scale(void);void vr_set_diorama_scale(float v);// diorama scale (game units per meter; bigger=smaller world)
 float vr_get_stereo(void);       void vr_set_stereo(float v);       // stereo separation strength
