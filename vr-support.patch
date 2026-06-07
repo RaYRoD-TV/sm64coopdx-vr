@@ -275,10 +275,10 @@ index 0000000..7625268
 +pause
 diff --git a/make_vr_dist.bat b/make_vr_dist.bat
 new file mode 100644
-index 0000000..ecd07f2
+index 0000000..246135a
 --- /dev/null
 +++ b/make_vr_dist.bat
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,75 @@
 +@echo off
 +title Package sm64coopdx VR (complete download)
 +REM ===========================================================================
@@ -334,7 +334,11 @@ index 0000000..ecd07f2
 +>>"%DIST%\READ_ME_FIRST.txt" echo That is it. Headset connected = VR automatically; no headset = normal flat
 +>>"%DIST%\READ_ME_FIRST.txt" echo game. Force it either way with  --vr  or  --novr .
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
-+>>"%DIST%\READ_ME_FIRST.txt" echo VR keys: F10 cycle view, F3/F4 distance, F1/F2 size, F7 recenter.
++>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
++>>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
++>>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
++>>"%DIST%\READ_ME_FIRST.txt" echo.
++>>"%DIST%\READ_ME_FIRST.txt" echo VR view keys: F10 cycle view, F3/F4 distance, F1/F2 size, F7 recenter.
 +>>"%DIST%\READ_ME_FIRST.txt" echo See VR_README.md for the full guide.
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo This download contains NO Nintendo files. coopdx reads Super Mario 64's
@@ -352,34 +356,31 @@ index 0000000..ecd07f2
 +pause
 diff --git a/play_vr.bat b/play_vr.bat
 new file mode 100644
-index 0000000..9526b6c
+index 0000000..d9b0d6c
 --- /dev/null
 +++ b/play_vr.bat
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,27 @@
 +@echo off
 +title sm64coopdx VR
 +REM ===========================================================================
-+REM  Launch sm64coopdx in OpenXR VR mode (Step 0 pipeline proof).
++REM  Launches sm64coopdx with a console window so you can watch the VR boot log.
++REM  --vr forces VR on; with a headset connected you can also just run the exe
++REM  directly and it picks VR on its own.
 +REM
-+REM  BEFORE running, make sure a PCVR / OpenXR runtime is live:
-+REM    Quest 3      -> Quest Link (cable) / Air Link / Virtual Desktop
-+REM                    (set Oculus or SteamVR as the active OpenXR runtime)
-+REM    Pimax Dream Air -> Pimax Play  (or SteamVR)
-+REM
-+REM  --console keeps this window open with the [VR] boot trace.
-+REM  If VR can't engage, the game still runs flat on the desktop.
++REM  Start your PCVR / OpenXR runtime first (Quest Link, Air Link, Virtual
++REM  Desktop, or SteamVR). If VR can't start, the game runs flat instead.
 +REM ===========================================================================
 +
 +cd /d "%~dp0build\us_pc"
 +
 +if not exist "sm64coopdx.exe" (
 +    echo ERROR: sm64coopdx.exe not found in build\us_pc.
-+    echo Build the game first ^(make -j in the MSYS2 MINGW64 shell^).
++    echo Build the game first ^(build_vr.bat, or make from the MSYS2 MINGW64 shell^).
 +    pause
 +    exit /b 1
 +)
 +
-+echo Launching sm64coopdx in VR mode...
++echo Launching sm64coopdx...
 +echo.
 +sm64coopdx.exe --vr --console
 +

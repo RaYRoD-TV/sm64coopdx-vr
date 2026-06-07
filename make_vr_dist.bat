@@ -53,7 +53,11 @@ echo Writing READ_ME_FIRST.txt ...
 >>"%DIST%\READ_ME_FIRST.txt" echo That is it. Headset connected = VR automatically; no headset = normal flat
 >>"%DIST%\READ_ME_FIRST.txt" echo game. Force it either way with  --vr  or  --novr .
 >>"%DIST%\READ_ME_FIRST.txt" echo.
->>"%DIST%\READ_ME_FIRST.txt" echo VR keys: F10 cycle view, F3/F4 distance, F1/F2 size, F7 recenter.
+>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
+>>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
+>>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
+>>"%DIST%\READ_ME_FIRST.txt" echo.
+>>"%DIST%\READ_ME_FIRST.txt" echo VR view keys: F10 cycle view, F3/F4 distance, F1/F2 size, F7 recenter.
 >>"%DIST%\READ_ME_FIRST.txt" echo See VR_README.md for the full guide.
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo This download contains NO Nintendo files. coopdx reads Super Mario 64's
