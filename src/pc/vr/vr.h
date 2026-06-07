@@ -65,7 +65,7 @@ void  vr_submit(void);          // xrEndFrame with the stereo projection layer
 // FLATSCREEN-ON-A-PANEL: for ALL non-gameplay screens, render the normal flat frame once into the
 // panel swapchain and present it on one large opaque head-locked quad (no diorama/dome/HUD split).
 void  vr_set_panel_mode(bool on); // mark this frame as a flat panel (vr_submit emits panel-only)
-void  vr_set_panel_world_lock(bool on); // true=world-locked (in-game menus), false=head-locked (title/main menu)
+void  vr_set_panel_full_frame(bool full); // crop: true=full 16:9 (in-game menus), false=4:3 (title/main menu); always world-locked
 bool  vr_begin_panel(void);       // acquire + bind the panel render target (the HUD swapchain)
 void  vr_end_panel(void);         // release the panel image (submitted as the sole opaque quad)
 

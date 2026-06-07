@@ -2,12 +2,16 @@
 #include "djui_panel.h"
 #include "djui_panel_menu.h"
 #include "djui_panel_vr.h"
+#include "djui_slider.h"
+#include "djui_checkbox.h"
 #include "pc/vr/vr.h"
 #include "game/first_person_cam.h"
 
 // In-game VR settings. DJUI sliders are integer-valued, so each one uses a small proxy that scales
 // to/from the VR module's float tunables. Values apply live as you drag, and you can see the current
-// value on each slider. "Reset to Default" puts everything back to the launch defaults.
+// value on each slider. "Reset to Default" puts everything back to the launch defaults AND refreshes
+// the on-screen widgets (DJUI only redraws a slider/checkbox when its value is changed through the
+// widget, so after a reset we have to nudge each one to redraw - otherwise the handles look stuck).
 
 static bool sFp;                // first person on/off
 static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
@@ -18,6 +22,10 @@ static unsigned int sDioSizeI;  // diorama scale, game units per meter (bigger =
 static unsigned int sDioHeightI;// diorama height, hundredths offset by 1 m (0..200 = -1.0..1.0 m)
 static unsigned int sStereoI;   // stereo depth, hundredths (0..200 = 0.0..2.0)
 static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
+
+// Widget handles, so Reset to Default can refresh what's on screen.
+static struct DjuiCheckbox *cbFp, *cbAntiClip;
+static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 
 static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
     if (v < (float)lo) { return lo; }
@@ -38,6 +46,19 @@ static void vr_panel_seed_proxies(void) {
     sHeadI      = clampu(vr_get_head_scale()   * 100.0f,            0, 150);
 }
 
+// Redraw every widget from its (just re-seeded) proxy value.
+static void vr_panel_refresh_widgets(void) {
+    if (cbFp)       { djui_base_set_visible(&cbFp->rectValue->base,       sFp); }
+    if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
+    if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
+    if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
+    if (slDioDist)   { djui_slider_update_value(&slDioDist->base); }
+    if (slDioSize)   { djui_slider_update_value(&slDioSize->base); }
+    if (slDioHeight) { djui_slider_update_value(&slDioHeight->base); }
+    if (slStereo)    { djui_slider_update_value(&slStereo->base); }
+    if (slHead)      { djui_slider_update_value(&slHead->base); }
+}
+
 static void vr_panel_fp_changed(UNUSED struct DjuiBase* caller) {
     set_first_person_enabled(sFp);                    // game first-person camera (flatscreen + VR base view)
     if (vr_is_active()) { vr_set_first_person(sFp); } // VR: render life-size at Mario's head
@@ -54,28 +75,33 @@ static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anti
 static void vr_panel_reset(UNUSED struct DjuiBase* caller) {
     vr_reset_defaults();
     set_first_person_enabled(false);
-    vr_panel_seed_proxies(); // refresh the widgets to the default values
+    vr_panel_seed_proxies();   // pull the defaults back into the proxies
+    vr_panel_refresh_widgets(); // and redraw the sliders/checkboxes so they don't look stuck
 }
 
 void djui_panel_vr_create(struct DjuiBase* caller) {
     vr_panel_seed_proxies();
+    // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
+    // previous open must not be reused.
+    cbFp = cbAntiClip = NULL;
+    slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 
     struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
     struct DjuiBase* body = djui_three_panel_get_body(panel);
     {
         // First person works in both flatscreen and VR, so it's always shown.
-        djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
+        cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
 
         // The rest only matters with VR running, so hide it in plain flatscreen sessions.
         if (vr_is_requested()) {
-            djui_slider_create(body, "Menu Distance",    &sMenuDistI,  10, 80,   vr_panel_menu_dist_changed);
-            djui_slider_create(body, "Menu Size",        &sMenuSizeI,  20, 120,  vr_panel_menu_size_changed);
-            djui_slider_create(body, "Diorama Distance", &sDioDistI,   0,  300,  vr_panel_dio_dist_changed);
-            djui_slider_create(body, "Diorama Size",     &sDioSizeI,   30, 3000, vr_panel_dio_size_changed);
-            djui_slider_create(body, "Diorama Height",   &sDioHeightI, 0,  200,  vr_panel_dio_height_changed);
-            djui_slider_create(body, "Stereo Depth",     &sStereoI,    0,  200,  vr_panel_stereo_changed);
-            djui_slider_create(body, "Head Motion",      &sHeadI,      0,  150,  vr_panel_head_changed);
-            djui_checkbox_create(body, "Camera Anti-Clip", &sAntiClip, vr_panel_anticlip_changed);
+            slMenuDist  = djui_slider_create(body, "Menu Distance",    &sMenuDistI,  10, 80,   vr_panel_menu_dist_changed);
+            slMenuSize  = djui_slider_create(body, "Menu Size",        &sMenuSizeI,  20, 120,  vr_panel_menu_size_changed);
+            slDioDist   = djui_slider_create(body, "Diorama Distance", &sDioDistI,   0,  300,  vr_panel_dio_dist_changed);
+            slDioSize   = djui_slider_create(body, "Diorama Size",     &sDioSizeI,   30, 3000, vr_panel_dio_size_changed);
+            slDioHeight = djui_slider_create(body, "Diorama Height",   &sDioHeightI, 0,  200,  vr_panel_dio_height_changed);
+            slStereo    = djui_slider_create(body, "Stereo Depth",     &sStereoI,    0,  200,  vr_panel_stereo_changed);
+            slHead      = djui_slider_create(body, "Head Motion",      &sHeadI,      0,  150,  vr_panel_head_changed);
+            cbAntiClip  = djui_checkbox_create(body, "Camera Anti-Clip", &sAntiClip, vr_panel_anticlip_changed);
         }
 
         djui_button_create(body, "Reset to Default", DJUI_BUTTON_STYLE_NORMAL, vr_panel_reset);

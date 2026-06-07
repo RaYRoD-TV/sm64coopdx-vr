@@ -122,12 +122,11 @@ static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; 
 // the in-game VR menu.
 static bool sFirstPerson = false;
 
-// Menu panel placement. In-game menus (pause/Player/DynOS) are WORLD-LOCKED: the panel spawns centered
-// on your facing, then stays put so you can turn your head to read across it (the lists sit on the
-// left of the frame). The title/main menu is HEAD-LOCKED instead, so it stays centered and fills your
-// view (a world-locked title panel left empty void around it at boot). pc_main picks per-frame via
-// vr_set_panel_world_lock().
-static bool  sPanelWorldLock   = true;
+// Menu panel: ALWAYS world-locked so you can turn your head to look around any menu (title + in-game).
+// sPanelFullFrame only chooses the crop/shape: in-game menus (Player/DynOS lists run to the edges) show
+// the full 16:9 frame; the title/main menu shows the centered 4:3 region on a taller quad (so it has no
+// empty void top/bottom). Set per-frame by pc_main via vr_set_panel_full_frame().
+static bool  sPanelFullFrame   = true;
 static bool  sPanelAnchorValid = false;
 static float sPanelAnchorPos[3] = {0.0f, 0.0f, 0.0f};
 static float sPanelAnchorQy = 0.0f, sPanelAnchorQw = 1.0f; // yaw-only orientation captured at menu open
@@ -794,12 +793,12 @@ void vr_end_overlay(bool sky) {
 // submit it as a single large OPAQUE head-locked quad (no projection layer, no dome, no HUD).
 void vr_set_panel_mode(bool on) { sPanelMode = on; }
 
-// Choose how the flat menu panel is placed this frame: true = world-locked (stays put, look around it;
-// for in-game lists like Player/DynOS), false = head-locked (centered, fills view; for the title/main
-// menu). Changing it drops the world-lock anchor so the next world-locked menu re-centers.
-void vr_set_panel_world_lock(bool on) {
-    if (on != sPanelWorldLock) { sPanelAnchorValid = false; }
-    sPanelWorldLock = on;
+// Choose the flat menu panel's crop/shape this frame: true = full 16:9 frame (in-game menus whose lists
+// run to the edges), false = centered 4:3 region on a taller quad (the title/main menu, so no void).
+// Either way the panel is world-locked. Changing it re-centers the panel on your current facing.
+void vr_set_panel_full_frame(bool full) {
+    if (full != sPanelFullFrame) { sPanelAnchorValid = false; }
+    sPanelFullFrame = full;
 }
 
 // Acquire + bind the HUD swapchain as the flat-panel render target (mirrors vr_begin_overlay(false)
@@ -836,7 +835,7 @@ void vr_submit(void) {
             hudQuad.layerFlags = 0;                                 // OPAQUE virtual screen
             hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             hudQuad.subImage.swapchain = sHud.handle;
-            if (sPanelWorldLock) {
+            if (sPanelFullFrame) {
                 // In-game menus: their lists run to the far left/right of the frame, so show the WHOLE
                 // 16:9 swapchain (no crop) on a 16:9 quad - nothing cut.
                 hudQuad.subImage.imageRect.offset.x = 0;
@@ -859,14 +858,7 @@ void vr_submit(void) {
                 hudQuad.size.height = sMenuSize * 3.0f / 4.0f; // 4:3
             }
 
-            if (!sPanelWorldLock && sViewSpace != XR_NULL_HANDLE) {
-                // Head-locked: centered in front of you, moves with your head so it always fills your
-                // view with no empty void around it. Used for the title/main-menu screens.
-                hudQuad.space = sViewSpace;
-                hudQuad.pose.orientation.w = 1.0f;
-                hudQuad.pose.position.z = -sMenuDist;
-                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
-            } else if (sLocalSpace != XR_NULL_HANDLE) {
+            if (sLocalSpace != XR_NULL_HANDLE) {
                 // World-locked, but smart about it: the panel re-anchors to the head's yaw-only pose
                 // (1) until the runtime reports a real tracked pose - so first boot doesn't freeze the
                 //     panel to an un-tracked/zero pose, and
@@ -988,7 +980,7 @@ bool  vr_begin_eye(int e)    { (void)e; return false; }
 void  vr_end_eye(int e)      { (void)e; }
 void  vr_submit(void)        {}
 void  vr_set_panel_mode(bool on) { (void)on; }
-void  vr_set_panel_world_lock(bool on) { (void)on; }
+void  vr_set_panel_full_frame(bool full) { (void)full; }
 bool  vr_begin_panel(void)   { return false; }
 void  vr_end_panel(void)     {}
 void  vr_shutdown(void)      {}
