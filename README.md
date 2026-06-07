@@ -40,7 +40,7 @@ headset just drives where you look.
 
 ### VR menu
 
-All the VR settings are in-game. Pause and open the VR button, right after Mod Menu:
+All the VR settings are in-game. Pause and open the VR button, right after Cheats:
 
 ![VR button in the pause menu](VR_Menu_Preview/image1.png)
 
