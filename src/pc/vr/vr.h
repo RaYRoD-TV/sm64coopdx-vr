@@ -17,9 +17,18 @@ bool  vr_headset_present(void);
 // Is an OpenXR session live and actively rendering?
 bool  vr_is_active(void);
 
-// EXPERIMENTAL: is true first-person mode on (F11)? When true the caller should enable the game's
-// first-person camera so the viewpoint sits at Mario's head; VR then renders it life-size.
+// Is true first-person mode on? When true the caller enables the game's first-person camera so the
+// viewpoint sits at Mario's head; VR then renders it life-size.
 bool  vr_first_person_active(void);
+
+// In-game VR options menu accessors (driven by the DJUI "VR" panel).
+void  vr_set_first_person(bool on);     // toggle the first-person preset (life-size, eye at Mario's head)
+float vr_get_menu_dist(void);    void vr_set_menu_dist(float v);    // flat menu panel distance (meters)
+float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu panel width (meters)
+bool  vr_get_menu_follow_head(void); void vr_set_menu_follow_head(bool v); // true=head-locked, false=world-locked
+float vr_get_diorama_dist(void); void vr_set_diorama_dist(float v); // diorama anchor distance (meters)
+float vr_get_diorama_scale(void);void vr_set_diorama_scale(float v);// diorama scale (game units per meter; bigger=smaller world)
+float vr_get_stereo(void);       void vr_set_stereo(float v);       // stereo separation strength
 
 // Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 // per-eye views. Call once before the eye loop.

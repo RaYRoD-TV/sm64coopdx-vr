@@ -106,11 +106,20 @@ static float sHudSize     = 2.4f;       // HUD panel width in meters (height fol
 static float sMenuDist    = 3.0f;       // menu panel distance (head-locked, -Z in VIEW); pushed back from 2.0
 static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; raise to overfill the FOV)
 
-// EXPERIMENTAL true first-person (F11). Enables coopdx's first-person camera (puts the game camera at
-// Mario's head) and renders the world life-size at 1:1 instead of the shrunk diorama. Free-look: the
-// headset looks around freely, the stick still moves and turns Mario like the flat game. Off by default;
-// not a shipped preset yet because it still needs in-headset tuning (scale, stereo, comfort).
+// True first-person: enables coopdx's first-person camera (game camera at Mario's head) and renders the
+// world life-size at 1:1 instead of the shrunk diorama. Free-look: the headset looks around freely, the
+// stick still moves and turns Mario like the flat game. Selected via the "First-person" preset (F10) or
+// the in-game VR menu.
 static bool sFirstPerson = false;
+
+// Menu panel placement. When sMenuFollowHead is true (default) the flat menu/UI panel is head-locked
+// (always centered in front of you). When false it is world-locked: it spawns centered in front of your
+// current facing when the menu opens, then stays put so you can turn your head to look across it (useful
+// for the Player/DynOS lists that sit on the left of the frame). Re-anchored on each menu entry.
+static bool  sMenuFollowHead   = true;
+static bool  sPanelAnchorValid = false;
+static float sPanelAnchorPos[3] = {0.0f, 0.0f, 0.0f};
+static float sPanelAnchorQy = 0.0f, sPanelAnchorQw = 1.0f; // yaw-only orientation captured at menu open
 
 // Per-eye camera-space -> eye-clip matrices (row-vector; clip = p_cam * sEyeVP).
 static float sEyeVP[2][4][4];
@@ -551,12 +560,13 @@ static void vr_write_tune_file(void) {
 }
 
 // --- VR presets (selectable looks) -------------------------------------------
-typedef struct { const char *name; float scale, dist, height, stereo; } VrPreset;
+// First-person is now a preset: it enables coopdx's first-person camera (camera at Mario's head)
+// and renders life-size at 1:1 instead of the shrunk diorama. F10 cycles Diorama / Close-up / First-person.
+typedef struct { const char *name; float scale, dist, height, stereo; bool firstPerson; } VrPreset;
 static const VrPreset sPresets[] = {
-    { "Diorama",      1200.0f,  0.37f, -0.20f, 0.21f },
-    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f },
-    // The old "First-person" entry was just a very close diorama, not real first person.
-    // Removed for now; true first-person VR (camera at Mario's head, 1:1 scale) is the goal.
+    { "Diorama",      1200.0f,  0.37f, -0.20f, 0.21f, false },
+    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, false },
+    { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, true  }, // life-size, eye at Mario's head, full 6DoF
 };
 #define VR_NUM_PRESETS ((int)(sizeof(sPresets) / sizeof(sPresets[0])))
 static int sCurrentPreset = 1; // launch default = Close-up
@@ -568,10 +578,31 @@ static void vr_apply_preset(int idx) {
     sDioramaDist   = sPresets[idx].dist;
     sDioramaHeight = sPresets[idx].height;
     sStereoScale   = sPresets[idx].stereo;
-    printf("[VR] preset %d/%d: %s (scale=%.0f dist=%.2f height=%.2f stereo=%.2f)\n",
+    sFirstPerson   = sPresets[idx].firstPerson;
+    sHeadScale     = sFirstPerson ? 1.0f : 0.4f; // life-size wants true 1:1 head motion; diorama wants damping
+    sHeadRestSet   = false; sHeadWarmup = 0;
+    printf("[VR] preset %d/%d: %s (scale=%.0f dist=%.2f height=%.2f stereo=%.2f fp=%d)\n",
         idx + 1, VR_NUM_PRESETS, sPresets[idx].name,
-        sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale);
+        sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, (int)sFirstPerson);
     vr_write_tune_file();
+}
+
+// --- In-game VR menu accessors (used by djui_panel_vr.c) ---------------------
+float vr_get_menu_dist(void)         { return sMenuDist; }
+void  vr_set_menu_dist(float v)      { sMenuDist = v; }
+float vr_get_menu_size(void)         { return sMenuSize; }
+void  vr_set_menu_size(float v)      { sMenuSize = v; }
+bool  vr_get_menu_follow_head(void)  { return sMenuFollowHead; }
+void  vr_set_menu_follow_head(bool v){ sMenuFollowHead = v; sPanelAnchorValid = false; }
+float vr_get_diorama_dist(void)      { return sDioramaDist; }
+void  vr_set_diorama_dist(float v)   { sDioramaDist = v; }
+float vr_get_diorama_scale(void)     { return sDioramaScale; }
+void  vr_set_diorama_scale(float v)  { sDioramaScale = (v < 30.0f) ? 30.0f : v; }
+float vr_get_stereo(void)            { return sStereoScale; }
+void  vr_set_stereo(float v)         { sStereoScale = (v < 0.0f) ? 0.0f : v; }
+void  vr_set_first_person(bool on) {
+    if (on) { vr_apply_preset(VR_NUM_PRESETS - 1); }   // the First-person preset
+    else if (sFirstPerson) { vr_apply_preset(1); }      // back to Close-up
 }
 
 // Live diorama tuning (dev): F10 cycles presets; F1/F2 scale, F3/F4 distance,
@@ -585,25 +616,6 @@ static void vr_poll_tuning_keys(void) {
     bool cyc = ks[SDL_SCANCODE_F10] != 0;
     if (cyc && !prevCycle) vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS);
     prevCycle = cyc;
-
-    // F11 toggles EXPERIMENTAL true first-person. On: life-size 1:1, eye at the camera, full 6DoF,
-    // and the game's first-person camera (camera at Mario's head) is enabled by pc_main. Off: restore
-    // the current diorama preset. Starting values are rough; tune live with F1/F2 (scale), F8/F9
-    // (stereo), [ / ] (head damping).
-    static bool prevFp = false;
-    bool fpKey = ks[SDL_SCANCODE_F11] != 0;
-    if (fpKey && !prevFp) {
-        sFirstPerson = !sFirstPerson;
-        if (sFirstPerson) {
-            sDioramaScale = 100.0f; sDioramaDist = 0.0f; sDioramaHeight = 0.0f;
-            sStereoScale = 0.5f; sHeadScale = 1.0f; sHeadRestSet = false; sHeadWarmup = 0;
-            printf("[VR] first-person ON (experimental). Life-size, eye at Mario's head. Tune: F1/F2 scale, F8/F9 stereo.\n");
-        } else {
-            vr_apply_preset(sCurrentPreset); sHeadScale = 0.4f; sHeadRestSet = false; sHeadWarmup = 0;
-            printf("[VR] first-person OFF. Back to %s.\n", sPresets[sCurrentPreset].name);
-        }
-    }
-    prevFp = fpKey;
 
     bool changed = false;
     if (ks[SDL_SCANCODE_F1]) { sDioramaScale  *= 0.98f; changed = true; } // bigger world
@@ -768,6 +780,9 @@ void vr_submit(void) {
     if (!sRunning || !sFrameBegun) return;
     sFrameBegun = false;
 
+    // Out of a menu this frame -> drop the world-lock anchor so the next menu re-centers in front of you.
+    if (!sPanelMode) sPanelAnchorValid = false;
+
     XrCompositionLayerProjection   proj    = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     XrCompositionLayerQuad         hudQuad = { XR_TYPE_COMPOSITION_LAYER_QUAD };
     // Game outputs STRAIGHT (non-premultiplied) alpha; the head-locked HUD quad must be UNPREMULTIPLIED.
@@ -777,28 +792,56 @@ void vr_submit(void) {
     uint32_t layerCount = 0;
 
     if (sPanelMode) {
-        // FLATSCREEN-ON-A-PANEL: a non-gameplay screen was rendered flat into sHud. Present it as
-        // the ONLY layer - one large OPAQUE head-locked quad (no projection layer, no dome, no
-        // separate HUD), so it stays centered in front of you (just farther away than before). The
-        // flat frame is SM64 4:3 centered inside the 16:9 swapchain, so crop the subImage to the
-        // centered 4:3 region and size the quad 4:3 -> no stretch, no black bars.
-        if (sHudReady && sViewSpace != XR_NULL_HANDLE) {
+        // FLATSCREEN-ON-A-PANEL: a non-gameplay screen was rendered flat into sHud. Present it as the
+        // ONLY layer - one large OPAQUE quad. The flat frame is SM64 4:3 centered inside the 16:9
+        // swapchain, so crop to the centered 4:3 region and size the quad 4:3 (no stretch, no bars).
+        if (sHudReady) {
             const int32_t cropH = (int32_t)sHud.h;                 // full height (1080)
             const int32_t cropW = (int32_t)(sHud.h * 4 / 3);       // centered 4:3 width (1440)
             const int32_t cropX = ((int32_t)sHud.w - cropW) / 2;   // x offset (240)
             hudQuad.layerFlags = 0;                                 // OPAQUE virtual screen
-            hudQuad.space = sViewSpace;                             // head-locked -> always centered
             hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             hudQuad.subImage.swapchain = sHud.handle;
             hudQuad.subImage.imageRect.offset.x = cropX;
             hudQuad.subImage.imageRect.offset.y = 0;
             hudQuad.subImage.imageRect.extent.width  = cropW;
             hudQuad.subImage.imageRect.extent.height = cropH;
-            hudQuad.pose.orientation.w = 1.0f;
-            hudQuad.pose.position.z = -sMenuDist;                   // comfortable distance (farther = less in-your-face)
-            hudQuad.size.width  = sMenuSize;                        // large virtual screen width
+            hudQuad.size.width  = sMenuSize;                        // virtual screen width
             hudQuad.size.height = sMenuSize * 3.0f / 4.0f;          // 4:3 -> no stretch
-            layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
+
+            if (sMenuFollowHead && sViewSpace != XR_NULL_HANDLE) {
+                // Head-locked: always centered in front of you (default).
+                hudQuad.space = sViewSpace;
+                hudQuad.pose.orientation.w = 1.0f;
+                hudQuad.pose.position.z = -sMenuDist;
+                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
+            } else if (sLocalSpace != XR_NULL_HANDLE) {
+                // World-locked ("look around menus"): capture the head's yaw-only pose when the menu
+                // opens so the panel spawns dead-centered on your current facing, then stays put so
+                // you can turn your head to read the left/right of it.
+                if (!sPanelAnchorValid && sViewsValid) {
+                    sPanelAnchorPos[0] = 0.5f * (sViews[0].pose.position.x + sViews[1].pose.position.x);
+                    sPanelAnchorPos[1] = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
+                    sPanelAnchorPos[2] = 0.5f * (sViews[0].pose.position.z + sViews[1].pose.position.z);
+                    float qy = sViews[0].pose.orientation.y, qw = sViews[0].pose.orientation.w;
+                    float n = sqrtf(qy*qy + qw*qw); if (n < 1e-6f) { qy = 0.0f; qw = 1.0f; n = 1.0f; }
+                    sPanelAnchorQy = qy / n; sPanelAnchorQw = qw / n;
+                    sPanelAnchorValid = true;
+                }
+                // Forward of the yaw-only quaternion Q=(0,qy,0,qw): R(Q)*(0,0,-1).
+                float qy = sPanelAnchorQy, qw = sPanelAnchorQw;
+                float fwdx = -2.0f * qw * qy;
+                float fwdz = -(1.0f - 2.0f * qy * qy);
+                hudQuad.space = sLocalSpace;
+                hudQuad.pose.orientation.x = 0.0f;
+                hudQuad.pose.orientation.y = qy;
+                hudQuad.pose.orientation.z = 0.0f;
+                hudQuad.pose.orientation.w = qw;
+                hudQuad.pose.position.x = sPanelAnchorPos[0] + sMenuDist * fwdx;
+                hudQuad.pose.position.y = sPanelAnchorPos[1];
+                hudQuad.pose.position.z = sPanelAnchorPos[2] + sMenuDist * fwdz;
+                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
+            }
         }
     } else if (sFrameState.shouldRender && sViewsValid && sViewCount == 2) {
         // The sky is now a 3D sphere rendered INSIDE the eye (world-locked, full coverage,
@@ -862,6 +905,13 @@ void vr_shutdown(void) {
 bool  vr_is_active(void)     { return false; }
 bool  vr_headset_present(void) { return false; }
 bool  vr_first_person_active(void) { return false; }
+void  vr_set_first_person(bool on) { (void)on; }
+float vr_get_menu_dist(void)         { return 0.0f; } void vr_set_menu_dist(float v)     { (void)v; }
+float vr_get_menu_size(void)         { return 0.0f; } void vr_set_menu_size(float v)     { (void)v; }
+bool  vr_get_menu_follow_head(void)  { return true; } void vr_set_menu_follow_head(bool v){ (void)v; }
+float vr_get_diorama_dist(void)      { return 0.0f; } void vr_set_diorama_dist(float v)  { (void)v; }
+float vr_get_diorama_scale(void)     { return 0.0f; } void vr_set_diorama_scale(float v) { (void)v; }
+float vr_get_stereo(void)            { return 0.0f; } void vr_set_stereo(float v)        { (void)v; }
 int   vr_eye_count(void)     { return 0; }
 int   vr_eye_width(int e)    { (void)e; return 0; }
 int   vr_eye_height(int e)   { (void)e; return 0; }
