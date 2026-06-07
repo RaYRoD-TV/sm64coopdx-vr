@@ -21,6 +21,10 @@ Run sm64coopdx.exe. Start your VR runtime first (Quest Link, Air Link, Virtual D
 if you want VR. You need your own SM64 US rom (.z64) in the folder or dragged onto the window. There's
 no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
 
+You actually play with the usual coopdx input: a gamepad (DualSense, DS4, Xbox) or mouse and keyboard.
+Head tracking drives the view. VR motion controllers aren't hooked up yet, so for now movement and
+buttons come from the controller or keyboard like the flat game.
+
 ### VR tuning keys (keyboard, while playing)
 
 | Key | What |
@@ -71,6 +75,6 @@ The person you share with brings their own rom either way.
 
 ## Still rough
 
-It's beta. Controller input isn't wired up yet, so it's head tracking plus the keyboard tuning keys
-for now. A few of the flat screens may want their panel distance nudged. Worth testing across
-different levels and runtimes.
+It's beta. VR motion controllers aren't wired up yet, so you play with a normal gamepad or keyboard
+and head tracking handles the view. A few of the flat screens may want their panel distance nudged.
+Worth testing across different levels and runtimes.

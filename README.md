@@ -26,9 +26,14 @@ normal.
 Already have sm64coopdx installed? You can skip the zip and just drop the release's sm64coopdx.exe
 and libopenxr_loader.dll into your existing folder.
 
-## VR controls
+## Controls
 
-Keyboard keys for adjusting the view while you play. Everything else is the usual game controls.
+You play with whatever sm64coopdx normally takes: a gamepad (DualSense, DS4, Xbox, etc.) or mouse
+and keyboard. In VR your head moves the view on top of that. Proper VR motion-controller support
+isn't done yet, it's still being worked on, so for now use a controller or the keyboard the same way
+you would in the flat game.
+
+These keyboard keys tune the VR view itself while you play:
 
 | Key | What it does |
 |-----|--------------|
@@ -40,7 +45,7 @@ Keyboard keys for adjusting the view while you play. Everything else is the usua
 | F7 | reset and recenter |
 | [ / ] | steadier / more head parallax |
 
-If it ever drifts off, F7 puts it back in front of you.
+If the view ever drifts off, F7 puts it back in front of you.
 
 ## Building from source
 

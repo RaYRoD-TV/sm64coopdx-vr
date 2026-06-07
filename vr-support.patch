@@ -50,10 +50,10 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..a83a24c 100644
+index 16ae934..7959ae2 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,61 @@
+@@ -1,22 +1,66 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
@@ -93,11 +93,16 @@ index 16ae934..a83a24c 100644
  
 -## Wiki
 -The wiki is made using GitHub's wiki feature, you can go to the wiki tab or click [here](https://github.com/coop-deluxe/sm64coopdx/wiki).
-+## VR controls
++## Controls
  
 -## Community
 -We have an official Discord server open to the public [here](https://discord.gg/TJVKHS4).
-+Keyboard keys for adjusting the view while you play. Everything else is the usual game controls.
++You play with whatever sm64coopdx normally takes: a gamepad (DualSense, DS4, Xbox, etc.) or mouse
++and keyboard. In VR your head moves the view on top of that. Proper VR motion-controller support
++isn't done yet, it's still being worked on, so for now use a controller or the keyboard the same way
++you would in the flat game.
++
++These keyboard keys tune the VR view itself while you play:
 +
 +| Key | What it does |
 +|-----|--------------|
@@ -109,7 +114,7 @@ index 16ae934..a83a24c 100644
 +| F7 | reset and recenter |
 +| [ / ] | steadier / more head parallax |
 +
-+If it ever drifts off, F7 puts it back in front of you.
++If the view ever drifts off, F7 puts it back in front of you.
 +
 +## Building from source
 +
@@ -130,10 +135,10 @@ index 16ae934..a83a24c 100644
 +by RaYRoD.
 diff --git a/VR_README.md b/VR_README.md
 new file mode 100644
-index 0000000..52240e4
+index 0000000..25ff51d
 --- /dev/null
 +++ b/VR_README.md
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,80 @@
 +# sm64coopdx VR - notes
 +
 +Technical notes for the VR build. If you just want to play, the main README covers that.
@@ -156,6 +161,10 @@ index 0000000..52240e4
 +Run sm64coopdx.exe. Start your VR runtime first (Quest Link, Air Link, Virtual Desktop, or SteamVR)
 +if you want VR. You need your own SM64 US rom (.z64) in the folder or dragged onto the window. There's
 +no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
++
++You actually play with the usual coopdx input: a gamepad (DualSense, DS4, Xbox) or mouse and keyboard.
++Head tracking drives the view. VR motion controllers aren't hooked up yet, so for now movement and
++buttons come from the controller or keyboard like the flat game.
 +
 +### VR tuning keys (keyboard, while playing)
 +
@@ -207,9 +216,9 @@ index 0000000..52240e4
 +
 +## Still rough
 +
-+It's beta. Controller input isn't wired up yet, so it's head tracking plus the keyboard tuning keys
-+for now. A few of the flat screens may want their panel distance nudged. Worth testing across
-+different levels and runtimes.
++It's beta. VR motion controllers aren't wired up yet, so you play with a normal gamepad or keyboard
++and head tracking handles the view. A few of the flat screens may want their panel distance nudged.
++Worth testing across different levels and runtimes.
 diff --git a/build_vr.bat b/build_vr.bat
 new file mode 100644
 index 0000000..7625268
