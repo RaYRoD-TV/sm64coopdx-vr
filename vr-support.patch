@@ -1096,7 +1096,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..ee74111 100644
+index 0d4f9f7..be83d00 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1137,7 +1137,7 @@ index 0d4f9f7..ee74111 100644
      switch (backend) {
          case GAPI_GL:
              gWindowApi = &gfx_sdl;
-@@ -256,6 +266,27 @@ static void select_graphics_backend(void) {
+@@ -256,6 +266,49 @@ static void select_graphics_backend(void) {
      }
  }
  
@@ -1162,10 +1162,32 @@ index 0d4f9f7..ee74111 100644
 +    return false;                                       // active gameplay
 +}
 +
++// Flatscreen first-person toggle (F11). coopdx already has a first-person camera (camera at Mario's
++// head + mouse look); this just binds a key to turn it on and off. VR has its own F11 path in vr.c,
++// so this only runs when not in VR. Ignored while typing in chat/console or in the main menu.
++static void poll_flatscreen_first_person_toggle(void) {
++    if (vr_is_active()) { return; }
++    extern bool gDjuiChatBoxFocus;  // pc/djui/djui_chat_box.h
++    extern bool gDjuiConsoleFocus;  // pc/djui/djui_console.h
++    extern bool gDjuiInMainMenu;    // pc/djui/djui.h
++    if (gDjuiChatBoxFocus || gDjuiConsoleFocus || gDjuiInMainMenu) { return; }
++    const Uint8 *ks = SDL_GetKeyboardState(NULL);
++    if (!ks) { return; }
++    extern bool get_first_person_enabled(void);     // game/first_person_cam.h
++    extern void set_first_person_enabled(bool enable);
++    static bool prevF11 = false;
++    bool nowF11 = ks[SDL_SCANCODE_F11] != 0;
++    if (nowF11 && !prevF11) {
++        set_first_person_enabled(!get_first_person_enabled());
++        printf("[FP] first-person %s\n", get_first_person_enabled() ? "ON" : "OFF");
++    }
++    prevF11 = nowF11;
++}
++
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +321,55 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +343,55 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1221,7 +1243,16 @@ index 0d4f9f7..ee74111 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +528,7 @@ void game_deinit(void) {
+@@ -380,6 +478,8 @@ void *audio_thread(UNUSED void *arg) {
+ }
+ 
+ void produce_one_frame(void) {
++    poll_flatscreen_first_person_toggle();
++
+     CTX_EXTENT(CTX_NETWORK, network_update);
+ 
+     CTX_EXTENT(CTX_INTERP, patch_interpolations_before);
+@@ -452,6 +552,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1229,7 +1260,7 @@ index 0d4f9f7..ee74111 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +581,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +605,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  

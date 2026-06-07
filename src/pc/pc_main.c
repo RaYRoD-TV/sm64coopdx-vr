@@ -287,6 +287,28 @@ static bool vr_frame_is_nongameplay(void) {
     return false;                                       // active gameplay
 }
 
+// Flatscreen first-person toggle (F11). coopdx already has a first-person camera (camera at Mario's
+// head + mouse look); this just binds a key to turn it on and off. VR has its own F11 path in vr.c,
+// so this only runs when not in VR. Ignored while typing in chat/console or in the main menu.
+static void poll_flatscreen_first_person_toggle(void) {
+    if (vr_is_active()) { return; }
+    extern bool gDjuiChatBoxFocus;  // pc/djui/djui_chat_box.h
+    extern bool gDjuiConsoleFocus;  // pc/djui/djui_console.h
+    extern bool gDjuiInMainMenu;    // pc/djui/djui.h
+    if (gDjuiChatBoxFocus || gDjuiConsoleFocus || gDjuiInMainMenu) { return; }
+    const Uint8 *ks = SDL_GetKeyboardState(NULL);
+    if (!ks) { return; }
+    extern bool get_first_person_enabled(void);     // game/first_person_cam.h
+    extern void set_first_person_enabled(bool enable);
+    static bool prevF11 = false;
+    bool nowF11 = ks[SDL_SCANCODE_F11] != 0;
+    if (nowF11 && !prevF11) {
+        set_first_person_enabled(!get_first_person_enabled());
+        printf("[FP] first-person %s\n", get_first_person_enabled() ? "ON" : "OFF");
+    }
+    prevF11 = nowF11;
+}
+
 void produce_interpolation_frames_and_delay(void) {
     u32 refreshRate = get_target_refresh_rate();
 
@@ -456,6 +478,8 @@ void *audio_thread(UNUSED void *arg) {
 }
 
 void produce_one_frame(void) {
+    poll_flatscreen_first_person_toggle();
+
     CTX_EXTENT(CTX_NETWORK, network_update);
 
     CTX_EXTENT(CTX_INTERP, patch_interpolations_before);
