@@ -93,6 +93,15 @@ static float sClipMargin    = 0.30f;   // anti-clip: keep the diorama this far f
 // (eye-space clip planes are computed per-frame from sDioramaScale so a bigger
 //  world isn't far-clipped to black - see vr_build_eye_matrix.)
 
+// Geometry anti-clip (diorama/close-up only). pc_main reads the cyclopean eye position in game-camera
+// space, converts it to world via the game camera, runs level collision, and writes back an anchor
+// offset (meters) that nudges the whole shrunk world off any wall/floor/ceiling the eye pokes into.
+// First-person is excluded (moving the eye off the head causes sickness).
+static bool  sAnticlipEnabled    = true;
+static float sAnticlipOffsetM[3] = { 0.0f, 0.0f, 0.0f }; // applied anchor offset (smoothed, in vr_build_eye_matrix)
+static float sHeadCamPos[3]      = { 0.0f, 0.0f, 0.0f }; // cyclopean eye in game-camera space (game units)
+static bool  sHeadCamPosValid    = false;
+
 // Sky: a world-anchored cylinder that wraps around you (falls back to a flat quad
 // if the cylinder layer isn't supported). HUD/menu panel: head-locked, near.
 static float sSkyRadius   = 8.0f;       // cylinder radius (meters) - distance to the sky surface
@@ -243,7 +252,20 @@ static void vr_build_eye_matrix(int eye) {
     float A[4][4] = {{0}};
     float invS = 1.0f / sDioramaScale;
     A[0][0] = invS; A[1][1] = invS; A[2][2] = invS; A[3][3] = 1.0f;
-    A[3][0] = 0.0f; A[3][1] = sDioramaHeight; A[3][2] = -effDist;
+    A[3][0] = sAnticlipOffsetM[0];
+    A[3][1] = sDioramaHeight + sAnticlipOffsetM[1];
+    A[3][2] = -effDist + sAnticlipOffsetM[2];
+
+    // Cyclopean eye position in game-camera space (the space A consumes), computed against the BASE
+    // anchor (NO anti-clip offset) - the offset is the OUTPUT pc_main derives from this raw position,
+    // so it must converge to zero when the raw eye is clear of geometry. pc_main converts this to world
+    // units and runs collision (diorama/close-up only; first-person is excluded).
+    if (eye == 0) {
+        sHeadCamPos[0] = (dcx - 0.0f)            * sDioramaScale;
+        sHeadCamPos[1] = (dcy - sDioramaHeight)  * sDioramaScale;
+        sHeadCamPos[2] = (dcz - (-effDist))      * sDioramaScale; // dcz + effDist
+        sHeadCamPosValid = sViewsValid && !sFirstPerson;
+    }
 
     // Clip planes adapt to the world scale so a big/life-size world isn't
     // far-clipped to black. SM64 geometry spans ~±8000 units.
@@ -614,7 +636,24 @@ void vr_reset_defaults(void) {
     sMenuDist = 3.0f;
     sMenuSize = 4.8f;
     sPanelAnchorValid = false;
+    sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
     printf("[VR] reset to defaults.\n");
+}
+
+// --- Geometry anti-clip bridge (pc_main does the world conversion + collision) -----------------
+bool  vr_anticlip_is_enabled(void)   { return sAnticlipEnabled; }
+void  vr_anticlip_set_enabled(bool e){ sAnticlipEnabled = e; if (!e) { sAnticlipOffsetM[0]=sAnticlipOffsetM[1]=sAnticlipOffsetM[2]=0.0f; } }
+// Cyclopean eye position in game-camera space (game units). Returns false when there's nothing to
+// resolve this frame (no tracked pose, first-person mode, or anti-clip disabled) - caller should then
+// let the applied offset ease back to zero.
+bool  vr_anticlip_get_head_campos(float out[3]) {
+    if (!sAnticlipEnabled || !sHeadCamPosValid || !sViewsValid) { return false; }
+    out[0] = sHeadCamPos[0]; out[1] = sHeadCamPos[1]; out[2] = sHeadCamPos[2];
+    return true;
+}
+// Set the smoothed anchor offset (meters) that vr_build_eye_matrix adds to the diorama anchor.
+void  vr_anticlip_set_offset(const float m[3]) {
+    sAnticlipOffsetM[0] = m[0]; sAnticlipOffsetM[1] = m[1]; sAnticlipOffsetM[2] = m[2];
 }
 
 // The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
@@ -936,6 +975,9 @@ float vr_get_stereo(void)            { return 0.0f; } void vr_set_stereo(float v
 float vr_get_diorama_height(void)    { return 0.0f; } void vr_set_diorama_height(float v){ (void)v; }
 float vr_get_head_scale(void)        { return 0.0f; } void vr_set_head_scale(float v)    { (void)v; }
 void  vr_reset_defaults(void) {}
+bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enabled(bool e) { (void)e; }
+bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
+void  vr_anticlip_set_offset(const float m[3]) { (void)m; }
 int   vr_eye_count(void)     { return 0; }
 int   vr_eye_width(int e)    { (void)e; return 0; }
 int   vr_eye_height(int e)   { (void)e; return 0; }

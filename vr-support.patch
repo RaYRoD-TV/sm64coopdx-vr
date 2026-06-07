@@ -810,10 +810,10 @@ index 37e8ea1..4691d0d 100644
  
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
-index 0000000..7923607
+index 0000000..68097a3
 --- /dev/null
 +++ b/src/pc/djui/djui_panel_vr.c
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,86 @@
 +#include "djui.h"
 +#include "djui_panel.h"
 +#include "djui_panel_menu.h"
@@ -826,6 +826,7 @@ index 0000000..7923607
 +// value on each slider. "Reset to Default" puts everything back to the launch defaults.
 +
 +static bool sFp;                // first person on/off
++static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
 +static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 +static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
 +static unsigned int sDioDistI;  // diorama distance, hundredths offset by 2 m (0..300 = -2.0..1.0 m)
@@ -843,6 +844,7 @@ index 0000000..7923607
 +// Pull the live VR values into the slider proxies so the widgets show the real state.
 +static void vr_panel_seed_proxies(void) {
 +    sFp         = vr_first_person_active() || get_first_person_enabled();
++    sAntiClip   = vr_anticlip_is_enabled();
 +    sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
 +    sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
 +    sDioDistI   = clampu((vr_get_diorama_dist()   + 2.0f) * 100.0f, 0, 300);
@@ -863,6 +865,7 @@ index 0000000..7923607
 +static void vr_panel_dio_height_changed(UNUSED struct DjuiBase* caller){ vr_set_diorama_height((float)sDioHeightI / 100.0f - 1.0f); }
 +static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 +static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
++static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
 +
 +static void vr_panel_reset(UNUSED struct DjuiBase* caller) {
 +    vr_reset_defaults();
@@ -888,6 +891,7 @@ index 0000000..7923607
 +            djui_slider_create(body, "Diorama Height",   &sDioHeightI, 0,  200,  vr_panel_dio_height_changed);
 +            djui_slider_create(body, "Stereo Depth",     &sStereoI,    0,  200,  vr_panel_stereo_changed);
 +            djui_slider_create(body, "Head Motion",      &sHeadI,      0,  150,  vr_panel_head_changed);
++            djui_checkbox_create(body, "Camera Anti-Clip", &sAntiClip, vr_panel_anticlip_changed);
 +        }
 +
 +        djui_button_create(body, "Reset to Default", DJUI_BUTTON_STYLE_NORMAL, vr_panel_reset);
@@ -1227,7 +1231,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..7933f0f 100644
+index 0d4f9f7..e83fae8 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1238,17 +1242,21 @@ index 0d4f9f7..7933f0f 100644
  #include "configfile.h"
  #include "thread.h"
  #include "controller/controller_api.h"
-@@ -32,6 +33,9 @@
+@@ -32,6 +33,13 @@
  #include "game/game_init.h"
  #include "game/main.h"
  #include "game/rumble_init.h"
 +#include "game/level_update.h"  // sCurrPlayMode, PLAY_MODE_*, gCurrCreditsEntry, gVrInActSelector
 +#include "game/ingame_menu.h"   // gMenuMode, get_dialog_id
 +#include "dialog_ids.h"         // DIALOG_NONE
++#include "game/camera.h"               // gCamera (->mtx is the renderer's world->camera matrix)
++#include "engine/surface_collision.h"  // find_floor / find_ceil / find_wall_collisions
++#include "engine/math_util.h"          // Mat4, mtxf_inverse_non_affine
++#include "game/object_list_processor.h" // gCheckingSurfaceCollisionsForCamera
  
  #include "pc/lua/utils/smlua_audio_utils.h"
  
-@@ -109,6 +113,9 @@ struct GfxWindowManagerAPI* gWindowApi = &gfx_dummy_wm_api;
+@@ -109,6 +117,9 @@ struct GfxWindowManagerAPI* gWindowApi = &gfx_dummy_wm_api;
  struct GfxRenderingAPI* gRenderApi = &gfx_dummy_renderer_api;
  
  extern void gfx_run(Gfx *commands);
@@ -1258,7 +1266,7 @@ index 0d4f9f7..7933f0f 100644
  extern void thread5_game_loop(void *arg);
  extern void create_next_audio_buffer(s16 *samples, u32 num_samples);
  void game_loop_one_iteration(void);
-@@ -231,6 +238,9 @@ static void select_graphics_backend(void) {
+@@ -231,6 +242,9 @@ static void select_graphics_backend(void) {
      if (gCLIOpts.backend != -1) { backend = gCLIOpts.backend; }
  #endif
  
@@ -1268,7 +1276,7 @@ index 0d4f9f7..7933f0f 100644
      switch (backend) {
          case GAPI_GL:
              gWindowApi = &gfx_sdl;
-@@ -256,6 +266,27 @@ static void select_graphics_backend(void) {
+@@ -256,6 +270,121 @@ static void select_graphics_backend(void) {
      }
  }
  
@@ -1293,10 +1301,104 @@ index 0d4f9f7..7933f0f 100644
 +    return false;                                       // active gameplay
 +}
 +
++// VR geometry anti-clip (diorama / close-up only). vr.c hands us the cyclopean eye position in
++// game-camera space; we convert it to world via the renderer's camera matrix, run level collision,
++// and hand back an anchor offset (meters) that nudges the whole shrunk world off any wall/floor/
++// ceiling the eye pokes into. First-person is excluded by vr_anticlip_get_head_campos() returning
++// false there (moving the eye off the head causes sickness). One-frame latency: the offset we set is
++// applied on the next vr_begin_frame(); the correction is clamped + eased so the world never lurches.
++static void vr_anticlip_resolve(void) {
++    static float applied[3] = { 0.0f, 0.0f, 0.0f };
++    float target[3] = { 0.0f, 0.0f, 0.0f };
++    float camPos[3];
++    bool active = vr_anticlip_get_head_campos(camPos) && (gCamera != NULL);
++
++    // diagnostics (rate-limited)
++    float wx = 0, wy = 0, wz = 0, fY = 0, cY = 0, dwx = 0, dwy = 0, dwz = 0;
++    bool haveFloor = false, haveCeil = false;
++
++    if (active) {
++        Mat4 inv;
++        if (mtxf_inverse_non_affine(inv, gCamera->mtx)) {
++            // camera-space (row vector) -> world: world = camPos * inv(gCamera->mtx)
++            wx = camPos[0]*inv[0][0] + camPos[1]*inv[1][0] + camPos[2]*inv[2][0] + inv[3][0];
++            wy = camPos[0]*inv[0][1] + camPos[1]*inv[1][1] + camPos[2]*inv[2][1] + inv[3][1];
++            wz = camPos[0]*inv[0][2] + camPos[1]*inv[1][2] + camPos[2]*inv[2][2] + inv[3][2];
++            // s16 cast guard inside find_floor
++            if (wx < -30000.0f) wx = -30000.0f; else if (wx > 30000.0f) wx = 30000.0f;
++            if (wz < -30000.0f) wz = -30000.0f; else if (wz > 30000.0f) wz = 30000.0f;
++
++            float scale    = vr_get_diorama_scale();
++            float marginWU = 0.10f * scale; // 10 cm physical standoff in world units
++
++            float cwx = wx, cwy = wy, cwz = wz;
++            gCheckingSurfaceCollisionsForCamera = TRUE;
++
++            struct Surface *floor = NULL, *ceil = NULL;
++            fY = find_floor(cwx, cwy, cwz, &floor);
++            cY = find_ceil (cwx, cwy, cwz, &ceil);
++            haveFloor = (floor != NULL) && (fY > -10000.0f);
++            haveCeil  = (ceil  != NULL) && (cY <  19000.0f);
++            if (haveFloor && cwy < fY + marginWU) cwy = fY + marginWU;
++            if (haveCeil  && cwy > cY - marginWU) cwy = cY - marginWU;
++            if (haveFloor && haveCeil && fY + marginWU > cY - marginWU) cwy = 0.5f * (fY + cY);
++
++            struct WallCollisionData wcd;
++            memset(&wcd, 0, sizeof(wcd));
++            wcd.x = cwx; wcd.y = cwy; wcd.z = cwz; wcd.offsetY = 0.0f; wcd.radius = marginWU;
++            find_wall_collisions(&wcd);
++            cwx = wcd.x; cwz = wcd.z;
++
++            // a wall push may have slid us over a step - re-clamp the floor once
++            fY = find_floor(cwx, cwy, cwz, &floor);
++            if (floor != NULL && fY > -10000.0f && cwy < fY + marginWU) cwy = fY + marginWU;
++
++            gCheckingSurfaceCollisionsForCamera = FALSE;
++
++            dwx = cwx - wx; dwy = cwy - wy; dwz = cwz - wz;
++
++            // world delta -> camera-space delta (rotation rows only), then -> LOCAL meters, negated
++            // (move the world opposite to the eye-pushout so the fixed head ends up outside geometry).
++            float dcx = dwx*gCamera->mtx[0][0] + dwy*gCamera->mtx[1][0] + dwz*gCamera->mtx[2][0];
++            float dcy = dwx*gCamera->mtx[0][1] + dwy*gCamera->mtx[1][1] + dwz*gCamera->mtx[2][1];
++            float dcz = dwx*gCamera->mtx[0][2] + dwy*gCamera->mtx[1][2] + dwz*gCamera->mtx[2][2];
++            float invScale = 1.0f / scale;
++            target[0] = -dcx * invScale;
++            target[1] = -dcy * invScale;
++            target[2] = -dcz * invScale;
++        } else {
++            active = false;
++        }
++    }
++
++    // Ease toward the target (zero when inactive). Clamp per-frame change so the world drifts gently,
++    // and hard-bound the total so a bad read can never throw the world far.
++    for (int i = 0; i < 3; i++) {
++        float d = target[i] - applied[i];
++        float maxStep = active ? 0.02f : 0.04f; // 2 cm/frame easing in, faster ease-out when inactive
++        if (d >  maxStep) d =  maxStep;
++        if (d < -maxStep) d = -maxStep;
++        applied[i] += d;
++        if (applied[i] >  0.60f) applied[i] =  0.60f;
++        if (applied[i] < -0.60f) applied[i] = -0.60f;
++    }
++    vr_anticlip_set_offset(applied);
++
++    if (active) {
++        static int dbg = 0;
++        if ((dbg++ % 30) == 0) {
++            printf("[VRanticlip] eyeW=(%.0f,%.0f,%.0f) fY=%s cY=%s dW=(%.0f,%.0f,%.0f) offM=(%.3f,%.3f,%.3f)\n",
++                wx, wy, wz,
++                haveFloor ? "y" : "-", haveCeil ? "y" : "-",
++                dwx, dwy, dwz, applied[0], applied[1], applied[2]);
++        }
++    }
++}
++
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +321,61 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +419,64 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1336,6 +1438,9 @@ index 0d4f9f7..7933f0f 100644
 +            } else {
 +                // ACTIVE GAMEPLAY: existing stereo diorama + world-locked sky dome + head-locked
 +                // HUD overlay (unchanged).
++                // Geometry anti-clip: read this frame's eye + camera, run collision, set the anchor
++                // offset for the next frame so the eye can't poke through walls/floors/ceilings.
++                vr_anticlip_resolve();
 +                int eyes = vr_eye_count();
 +                for (int e = 0; e < eyes; e++) {
 +                    if (vr_begin_eye(e)) {
@@ -1358,7 +1463,7 @@ index 0d4f9f7..7933f0f 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +534,7 @@ void game_deinit(void) {
+@@ -452,6 +635,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1366,7 +1471,7 @@ index 0d4f9f7..7933f0f 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +587,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +688,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -1384,10 +1489,10 @@ index 0d4f9f7..7933f0f 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..b688b9e
+index 0000000..7b7cf72
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,954 @@
+@@ -0,0 +1,996 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -1482,6 +1587,15 @@ index 0000000..b688b9e
 +static float sClipMargin    = 0.30f;   // anti-clip: keep the diorama this far from the head (backs off on lean-in)
 +// (eye-space clip planes are computed per-frame from sDioramaScale so a bigger
 +//  world isn't far-clipped to black - see vr_build_eye_matrix.)
++
++// Geometry anti-clip (diorama/close-up only). pc_main reads the cyclopean eye position in game-camera
++// space, converts it to world via the game camera, runs level collision, and writes back an anchor
++// offset (meters) that nudges the whole shrunk world off any wall/floor/ceiling the eye pokes into.
++// First-person is excluded (moving the eye off the head causes sickness).
++static bool  sAnticlipEnabled    = true;
++static float sAnticlipOffsetM[3] = { 0.0f, 0.0f, 0.0f }; // applied anchor offset (smoothed, in vr_build_eye_matrix)
++static float sHeadCamPos[3]      = { 0.0f, 0.0f, 0.0f }; // cyclopean eye in game-camera space (game units)
++static bool  sHeadCamPosValid    = false;
 +
 +// Sky: a world-anchored cylinder that wraps around you (falls back to a flat quad
 +// if the cylinder layer isn't supported). HUD/menu panel: head-locked, near.
@@ -1633,7 +1747,20 @@ index 0000000..b688b9e
 +    float A[4][4] = {{0}};
 +    float invS = 1.0f / sDioramaScale;
 +    A[0][0] = invS; A[1][1] = invS; A[2][2] = invS; A[3][3] = 1.0f;
-+    A[3][0] = 0.0f; A[3][1] = sDioramaHeight; A[3][2] = -effDist;
++    A[3][0] = sAnticlipOffsetM[0];
++    A[3][1] = sDioramaHeight + sAnticlipOffsetM[1];
++    A[3][2] = -effDist + sAnticlipOffsetM[2];
++
++    // Cyclopean eye position in game-camera space (the space A consumes), computed against the BASE
++    // anchor (NO anti-clip offset) - the offset is the OUTPUT pc_main derives from this raw position,
++    // so it must converge to zero when the raw eye is clear of geometry. pc_main converts this to world
++    // units and runs collision (diorama/close-up only; first-person is excluded).
++    if (eye == 0) {
++        sHeadCamPos[0] = (dcx - 0.0f)            * sDioramaScale;
++        sHeadCamPos[1] = (dcy - sDioramaHeight)  * sDioramaScale;
++        sHeadCamPos[2] = (dcz - (-effDist))      * sDioramaScale; // dcz + effDist
++        sHeadCamPosValid = sViewsValid && !sFirstPerson;
++    }
 +
 +    // Clip planes adapt to the world scale so a big/life-size world isn't
 +    // far-clipped to black. SM64 geometry spans ~±8000 units.
@@ -2004,7 +2131,24 @@ index 0000000..b688b9e
 +    sMenuDist = 3.0f;
 +    sMenuSize = 4.8f;
 +    sPanelAnchorValid = false;
++    sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
 +    printf("[VR] reset to defaults.\n");
++}
++
++// --- Geometry anti-clip bridge (pc_main does the world conversion + collision) -----------------
++bool  vr_anticlip_is_enabled(void)   { return sAnticlipEnabled; }
++void  vr_anticlip_set_enabled(bool e){ sAnticlipEnabled = e; if (!e) { sAnticlipOffsetM[0]=sAnticlipOffsetM[1]=sAnticlipOffsetM[2]=0.0f; } }
++// Cyclopean eye position in game-camera space (game units). Returns false when there's nothing to
++// resolve this frame (no tracked pose, first-person mode, or anti-clip disabled) - caller should then
++// let the applied offset ease back to zero.
++bool  vr_anticlip_get_head_campos(float out[3]) {
++    if (!sAnticlipEnabled || !sHeadCamPosValid || !sViewsValid) { return false; }
++    out[0] = sHeadCamPos[0]; out[1] = sHeadCamPos[1]; out[2] = sHeadCamPos[2];
++    return true;
++}
++// Set the smoothed anchor offset (meters) that vr_build_eye_matrix adds to the diorama anchor.
++void  vr_anticlip_set_offset(const float m[3]) {
++    sAnticlipOffsetM[0] = m[0]; sAnticlipOffsetM[1] = m[1]; sAnticlipOffsetM[2] = m[2];
 +}
 +
 +// The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
@@ -2326,6 +2470,9 @@ index 0000000..b688b9e
 +float vr_get_diorama_height(void)    { return 0.0f; } void vr_set_diorama_height(float v){ (void)v; }
 +float vr_get_head_scale(void)        { return 0.0f; } void vr_set_head_scale(float v)    { (void)v; }
 +void  vr_reset_defaults(void) {}
++bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enabled(bool e) { (void)e; }
++bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
++void  vr_anticlip_set_offset(const float m[3]) { (void)m; }
 +int   vr_eye_count(void)     { return 0; }
 +int   vr_eye_width(int e)    { (void)e; return 0; }
 +int   vr_eye_height(int e)   { (void)e; return 0; }
@@ -2344,10 +2491,10 @@ index 0000000..b688b9e
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..1740aad
+index 0000000..cddae03
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,78 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -2381,6 +2528,12 @@ index 0000000..1740aad
 +float vr_get_diorama_height(void); void vr_set_diorama_height(float v); // diorama height offset (meters)
 +float vr_get_head_scale(void);   void vr_set_head_scale(float v);   // 6DoF head-motion damping (0=locked, 1=full)
 +void  vr_reset_defaults(void);   // reset every VR tunable to launch defaults
++
++// Geometry anti-clip (diorama/close-up). pc_main computes the world-space eye + collision and writes
++// back the anchor offset; vr.c just stores the per-frame geometry and applies the offset.
++bool  vr_anticlip_is_enabled(void);   void vr_anticlip_set_enabled(bool e);
++bool  vr_anticlip_get_head_campos(float out[3]); // cyclopean eye in game-camera space; false = skip this frame
++void  vr_anticlip_set_offset(const float m[3]);  // smoothed anchor offset (meters)
 +
 +// Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 +// per-eye views. Call once before the eye loop.

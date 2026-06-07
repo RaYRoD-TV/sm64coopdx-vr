@@ -36,6 +36,10 @@
 #include "game/level_update.h"  // sCurrPlayMode, PLAY_MODE_*, gCurrCreditsEntry, gVrInActSelector
 #include "game/ingame_menu.h"   // gMenuMode, get_dialog_id
 #include "dialog_ids.h"         // DIALOG_NONE
+#include "game/camera.h"               // gCamera (->mtx is the renderer's world->camera matrix)
+#include "engine/surface_collision.h"  // find_floor / find_ceil / find_wall_collisions
+#include "engine/math_util.h"          // Mat4, mtxf_inverse_non_affine
+#include "game/object_list_processor.h" // gCheckingSurfaceCollisionsForCamera
 
 #include "pc/lua/utils/smlua_audio_utils.h"
 
@@ -287,6 +291,100 @@ static bool vr_frame_is_nongameplay(void) {
     return false;                                       // active gameplay
 }
 
+// VR geometry anti-clip (diorama / close-up only). vr.c hands us the cyclopean eye position in
+// game-camera space; we convert it to world via the renderer's camera matrix, run level collision,
+// and hand back an anchor offset (meters) that nudges the whole shrunk world off any wall/floor/
+// ceiling the eye pokes into. First-person is excluded by vr_anticlip_get_head_campos() returning
+// false there (moving the eye off the head causes sickness). One-frame latency: the offset we set is
+// applied on the next vr_begin_frame(); the correction is clamped + eased so the world never lurches.
+static void vr_anticlip_resolve(void) {
+    static float applied[3] = { 0.0f, 0.0f, 0.0f };
+    float target[3] = { 0.0f, 0.0f, 0.0f };
+    float camPos[3];
+    bool active = vr_anticlip_get_head_campos(camPos) && (gCamera != NULL);
+
+    // diagnostics (rate-limited)
+    float wx = 0, wy = 0, wz = 0, fY = 0, cY = 0, dwx = 0, dwy = 0, dwz = 0;
+    bool haveFloor = false, haveCeil = false;
+
+    if (active) {
+        Mat4 inv;
+        if (mtxf_inverse_non_affine(inv, gCamera->mtx)) {
+            // camera-space (row vector) -> world: world = camPos * inv(gCamera->mtx)
+            wx = camPos[0]*inv[0][0] + camPos[1]*inv[1][0] + camPos[2]*inv[2][0] + inv[3][0];
+            wy = camPos[0]*inv[0][1] + camPos[1]*inv[1][1] + camPos[2]*inv[2][1] + inv[3][1];
+            wz = camPos[0]*inv[0][2] + camPos[1]*inv[1][2] + camPos[2]*inv[2][2] + inv[3][2];
+            // s16 cast guard inside find_floor
+            if (wx < -30000.0f) wx = -30000.0f; else if (wx > 30000.0f) wx = 30000.0f;
+            if (wz < -30000.0f) wz = -30000.0f; else if (wz > 30000.0f) wz = 30000.0f;
+
+            float scale    = vr_get_diorama_scale();
+            float marginWU = 0.10f * scale; // 10 cm physical standoff in world units
+
+            float cwx = wx, cwy = wy, cwz = wz;
+            gCheckingSurfaceCollisionsForCamera = TRUE;
+
+            struct Surface *floor = NULL, *ceil = NULL;
+            fY = find_floor(cwx, cwy, cwz, &floor);
+            cY = find_ceil (cwx, cwy, cwz, &ceil);
+            haveFloor = (floor != NULL) && (fY > -10000.0f);
+            haveCeil  = (ceil  != NULL) && (cY <  19000.0f);
+            if (haveFloor && cwy < fY + marginWU) cwy = fY + marginWU;
+            if (haveCeil  && cwy > cY - marginWU) cwy = cY - marginWU;
+            if (haveFloor && haveCeil && fY + marginWU > cY - marginWU) cwy = 0.5f * (fY + cY);
+
+            struct WallCollisionData wcd;
+            memset(&wcd, 0, sizeof(wcd));
+            wcd.x = cwx; wcd.y = cwy; wcd.z = cwz; wcd.offsetY = 0.0f; wcd.radius = marginWU;
+            find_wall_collisions(&wcd);
+            cwx = wcd.x; cwz = wcd.z;
+
+            // a wall push may have slid us over a step - re-clamp the floor once
+            fY = find_floor(cwx, cwy, cwz, &floor);
+            if (floor != NULL && fY > -10000.0f && cwy < fY + marginWU) cwy = fY + marginWU;
+
+            gCheckingSurfaceCollisionsForCamera = FALSE;
+
+            dwx = cwx - wx; dwy = cwy - wy; dwz = cwz - wz;
+
+            // world delta -> camera-space delta (rotation rows only), then -> LOCAL meters, negated
+            // (move the world opposite to the eye-pushout so the fixed head ends up outside geometry).
+            float dcx = dwx*gCamera->mtx[0][0] + dwy*gCamera->mtx[1][0] + dwz*gCamera->mtx[2][0];
+            float dcy = dwx*gCamera->mtx[0][1] + dwy*gCamera->mtx[1][1] + dwz*gCamera->mtx[2][1];
+            float dcz = dwx*gCamera->mtx[0][2] + dwy*gCamera->mtx[1][2] + dwz*gCamera->mtx[2][2];
+            float invScale = 1.0f / scale;
+            target[0] = -dcx * invScale;
+            target[1] = -dcy * invScale;
+            target[2] = -dcz * invScale;
+        } else {
+            active = false;
+        }
+    }
+
+    // Ease toward the target (zero when inactive). Clamp per-frame change so the world drifts gently,
+    // and hard-bound the total so a bad read can never throw the world far.
+    for (int i = 0; i < 3; i++) {
+        float d = target[i] - applied[i];
+        float maxStep = active ? 0.02f : 0.04f; // 2 cm/frame easing in, faster ease-out when inactive
+        if (d >  maxStep) d =  maxStep;
+        if (d < -maxStep) d = -maxStep;
+        applied[i] += d;
+        if (applied[i] >  0.60f) applied[i] =  0.60f;
+        if (applied[i] < -0.60f) applied[i] = -0.60f;
+    }
+    vr_anticlip_set_offset(applied);
+
+    if (active) {
+        static int dbg = 0;
+        if ((dbg++ % 30) == 0) {
+            printf("[VRanticlip] eyeW=(%.0f,%.0f,%.0f) fY=%s cY=%s dW=(%.0f,%.0f,%.0f) offM=(%.3f,%.3f,%.3f)\n",
+                wx, wy, wz,
+                haveFloor ? "y" : "-", haveCeil ? "y" : "-",
+                dwx, dwy, dwz, applied[0], applied[1], applied[2]);
+        }
+    }
+}
+
 void produce_interpolation_frames_and_delay(void) {
     u32 refreshRate = get_target_refresh_rate();
 
@@ -357,6 +455,9 @@ void produce_interpolation_frames_and_delay(void) {
             } else {
                 // ACTIVE GAMEPLAY: existing stereo diorama + world-locked sky dome + head-locked
                 // HUD overlay (unchanged).
+                // Geometry anti-clip: read this frame's eye + camera, run collision, set the anchor
+                // offset for the next frame so the eye can't poke through walls/floors/ceilings.
+                vr_anticlip_resolve();
                 int eyes = vr_eye_count();
                 for (int e = 0; e < eyes; e++) {
                     if (vr_begin_eye(e)) {

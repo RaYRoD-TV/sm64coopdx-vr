@@ -10,6 +10,7 @@
 // value on each slider. "Reset to Default" puts everything back to the launch defaults.
 
 static bool sFp;                // first person on/off
+static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
 static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
 static unsigned int sDioDistI;  // diorama distance, hundredths offset by 2 m (0..300 = -2.0..1.0 m)
@@ -27,6 +28,7 @@ static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
 // Pull the live VR values into the slider proxies so the widgets show the real state.
 static void vr_panel_seed_proxies(void) {
     sFp         = vr_first_person_active() || get_first_person_enabled();
+    sAntiClip   = vr_anticlip_is_enabled();
     sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
     sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
     sDioDistI   = clampu((vr_get_diorama_dist()   + 2.0f) * 100.0f, 0, 300);
@@ -47,6 +49,7 @@ static void vr_panel_dio_size_changed(UNUSED struct DjuiBase* caller)  { vr_set_
 static void vr_panel_dio_height_changed(UNUSED struct DjuiBase* caller){ vr_set_diorama_height((float)sDioHeightI / 100.0f - 1.0f); }
 static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
+static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
 
 static void vr_panel_reset(UNUSED struct DjuiBase* caller) {
     vr_reset_defaults();
@@ -72,6 +75,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
             djui_slider_create(body, "Diorama Height",   &sDioHeightI, 0,  200,  vr_panel_dio_height_changed);
             djui_slider_create(body, "Stereo Depth",     &sStereoI,    0,  200,  vr_panel_stereo_changed);
             djui_slider_create(body, "Head Motion",      &sHeadI,      0,  150,  vr_panel_head_changed);
+            djui_checkbox_create(body, "Camera Anti-Clip", &sAntiClip, vr_panel_anticlip_changed);
         }
 
         djui_button_create(body, "Reset to Default", DJUI_BUTTON_STYLE_NORMAL, vr_panel_reset);

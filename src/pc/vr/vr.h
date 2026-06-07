@@ -32,6 +32,12 @@ float vr_get_diorama_height(void); void vr_set_diorama_height(float v); // diora
 float vr_get_head_scale(void);   void vr_set_head_scale(float v);   // 6DoF head-motion damping (0=locked, 1=full)
 void  vr_reset_defaults(void);   // reset every VR tunable to launch defaults
 
+// Geometry anti-clip (diorama/close-up). pc_main computes the world-space eye + collision and writes
+// back the anchor offset; vr.c just stores the per-frame geometry and applies the offset.
+bool  vr_anticlip_is_enabled(void);   void vr_anticlip_set_enabled(bool e);
+bool  vr_anticlip_get_head_campos(float out[3]); // cyclopean eye in game-camera space; false = skip this frame
+void  vr_anticlip_set_offset(const float m[3]);  // smoothed anchor offset (meters)
+
 // Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 // per-eye views. Call once before the eye loop.
 void  vr_begin_frame(void);
