@@ -15,8 +15,8 @@ your machine.
 
 1. Grab sm64coopdx-vr.zip from the Releases page.
 2. Unzip it somewhere.
-3. Put your SM64 US rom (a .z64 file) in the folder. On first run you can also just drag the rom
-   onto the window.
+3. Put your Super Mario 64 US ROM in the folder and name it baserom.us.z64. (On first run you can
+   also just drag any .z64 onto the window and it sets that up for you.)
 4. Run sm64coopdx.exe.
 
 If a headset is connected it boots into VR, otherwise you get the flat game. Start your VR runtime
@@ -31,22 +31,13 @@ into your existing folder.
 
 You play with whatever sm64coopdx normally takes: a gamepad (DualSense, DS4, Xbox, etc.) or mouse
 and keyboard. In VR your head moves the view on top of that. Proper VR motion-controller support
-isn't done yet, it's still being worked on, so for now use a controller or the keyboard the same way
-you would in the flat game.
+isn't done yet, so for now use a controller or the keyboard the same way you would in the flat game.
 
-These keyboard keys tune the VR view itself while you play:
+All the VR settings are in-game. Pause and open VR (the button right after Mod Menu). From there you
+set view distance, size, height, stereo depth, head motion, first person, and camera anti-clip, and
+there's a Reset to Default button.
 
-| Key | What it does |
-|-----|--------------|
-| F10 | cycle view (diorama / close-up / first-person) |
-| F3 / F4 | world closer / farther |
-| F1 / F2 | world bigger / smaller |
-| F5 / F6 | world down / up |
-| F8 / F9 | less / more depth |
-| F7 | reset and recenter |
-| [ / ] | steadier / more head parallax |
-
-If the view ever drifts off, F7 puts it back in front of you.
+One keyboard shortcut: F10 cycles the view (diorama / close-up / first-person).
 
 ## Building from source
 

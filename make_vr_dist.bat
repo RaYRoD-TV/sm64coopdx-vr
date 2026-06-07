@@ -50,8 +50,8 @@ echo Writing READ_ME_FIRST.txt ...
 > "%DIST%\READ_ME_FIRST.txt" echo sm64coopdx VR - complete edition
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo HOW TO PLAY:
->>"%DIST%\READ_ME_FIRST.txt" echo  1. Put your own Super Mario 64 US ROM (a .z64 file) into THIS folder.
->>"%DIST%\READ_ME_FIRST.txt" echo     (Or drag it onto the window the first time you run the game.)
+>>"%DIST%\READ_ME_FIRST.txt" echo  1. Put your own Super Mario 64 US ROM into THIS folder, named baserom.us.z64.
+>>"%DIST%\READ_ME_FIRST.txt" echo     (Or drag any .z64 onto the window the first time you run the game.)
 >>"%DIST%\READ_ME_FIRST.txt" echo  2. If you have a VR headset: start your PCVR / OpenXR runtime first
 >>"%DIST%\READ_ME_FIRST.txt" echo     (Quest Link, Virtual Desktop, or SteamVR).
 >>"%DIST%\READ_ME_FIRST.txt" echo  3. Run sm64coopdx.exe.
@@ -63,8 +63,8 @@ echo Writing READ_ME_FIRST.txt ...
 >>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
 >>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
 >>"%DIST%\READ_ME_FIRST.txt" echo.
->>"%DIST%\READ_ME_FIRST.txt" echo VR view keys: F10 cycle view, F3/F4 distance, F1/F2 size, F7 recenter.
->>"%DIST%\READ_ME_FIRST.txt" echo See VR_README.md for the full guide.
+>>"%DIST%\READ_ME_FIRST.txt" echo VR settings are in-game: pause and open VR (right after Mod Menu). F10 cycles
+>>"%DIST%\READ_ME_FIRST.txt" echo the view (diorama / close-up / first-person). See VR_README.md for the full guide.
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo This download contains NO Nintendo files. coopdx reads Super Mario 64's
 >>"%DIST%\READ_ME_FIRST.txt" echo textures and audio from YOUR OWN ROM at runtime - you must own the game.

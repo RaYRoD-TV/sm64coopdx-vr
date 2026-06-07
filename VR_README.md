@@ -18,26 +18,19 @@ or --novr. Built against OpenXR 1.0, tested mostly on Virtual Desktop's runtime 
 ## Running it
 
 Run sm64coopdx.exe. Start your VR runtime first (Quest Link, Air Link, Virtual Desktop, or SteamVR)
-if you want VR. You need your own SM64 US rom (.z64) in the folder or dragged onto the window. There's
-no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
+if you want VR. Put your own SM64 US ROM in the folder named baserom.us.z64 (or drag any .z64 onto the
+window). There's no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
 
 You actually play with the usual coopdx input: a gamepad (DualSense, DS4, Xbox) or mouse and keyboard.
 Head tracking drives the view. VR motion controllers aren't hooked up yet, so for now movement and
 buttons come from the controller or keyboard like the flat game.
 
-### VR tuning keys (keyboard, while playing)
+### VR settings (in-game)
 
-| Key | What |
-|-----|------|
-| F1 / F2 | world bigger / smaller |
-| F3 / F4 | world closer / farther |
-| F5 / F6 | world down / up |
-| F7 | reset and recenter |
-| F8 / F9 | less / more stereo depth |
-| F10 | cycle preset (diorama / close-up / first-person) |
-| [ / ] | steadier / more head parallax |
-
-Whatever you tune gets saved to vr_tune.txt next to the exe.
+All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set view
+distance, size, height, stereo depth, head motion, first person, and camera anti-clip, with a Reset
+to Default button. The one keyboard shortcut is F10, which cycles the view (diorama / close-up /
+first-person).
 
 ## Building
 
@@ -67,8 +60,8 @@ The person you share with brings their own rom either way.
 ## Where the VR code lives
 
 - src/pc/vr/vr.c, vr.h - the OpenXR work: session setup, per-eye view/projection matrices, stereo,
-  head-tracking damping, the sky-dome matrix, the menu panel, tuning keys, frame submit, and the
-  startup headset check.
+  head-tracking damping, the sky-dome matrix, the menu panel, the geometry anti-clip, the F10 view
+  cycle, frame submit, and the startup headset check.
 - src/pc/gfx/gfx_pc.c, gfx_opengl.c - the per-eye / sky-dome / flat-panel render paths.
 - src/game/skybox.c - builds the 3D sky sphere for VR.
 - src/pc/pc_main.c - the VR frame loop and the auto-detect.

@@ -50,10 +50,10 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..8e13fea 100644
+index 16ae934..c55b348 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,67 @@
+@@ -1,22 +1,58 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
@@ -78,8 +78,8 @@ index 16ae934..8e13fea 100644
 -Interestingly enough though, the goal of the project has slowly evolved over time from simply just making a Super Mario 64 multiplayer mod to constantly maintaining and improving the project (notably the Lua API.)
 +1. Grab sm64coopdx-vr.zip from the Releases page.
 +2. Unzip it somewhere.
-+3. Put your SM64 US rom (a .z64 file) in the folder. On first run you can also just drag the rom
-+   onto the window.
++3. Put your Super Mario 64 US ROM in the folder and name it baserom.us.z64. (On first run you can
++   also just drag any .z64 onto the window and it sets that up for you.)
 +4. Run sm64coopdx.exe.
  
 -## Documentation
@@ -100,22 +100,13 @@ index 16ae934..8e13fea 100644
 -We have an official Discord server open to the public [here](https://discord.gg/TJVKHS4).
 +You play with whatever sm64coopdx normally takes: a gamepad (DualSense, DS4, Xbox, etc.) or mouse
 +and keyboard. In VR your head moves the view on top of that. Proper VR motion-controller support
-+isn't done yet, it's still being worked on, so for now use a controller or the keyboard the same way
-+you would in the flat game.
++isn't done yet, so for now use a controller or the keyboard the same way you would in the flat game.
 +
-+These keyboard keys tune the VR view itself while you play:
++All the VR settings are in-game. Pause and open VR (the button right after Mod Menu). From there you
++set view distance, size, height, stereo depth, head motion, first person, and camera anti-clip, and
++there's a Reset to Default button.
 +
-+| Key | What it does |
-+|-----|--------------|
-+| F10 | cycle view (diorama / close-up / first-person) |
-+| F3 / F4 | world closer / farther |
-+| F1 / F2 | world bigger / smaller |
-+| F5 / F6 | world down / up |
-+| F8 / F9 | less / more depth |
-+| F7 | reset and recenter |
-+| [ / ] | steadier / more head parallax |
-+
-+If the view ever drifts off, F7 puts it back in front of you.
++One keyboard shortcut: F10 cycles the view (diorama / close-up / first-person).
 +
 +## Building from source
 +
@@ -136,10 +127,10 @@ index 16ae934..8e13fea 100644
 +by RaYRoD.
 diff --git a/VR_README.md b/VR_README.md
 new file mode 100644
-index 0000000..c672bfd
+index 0000000..7d03f28
 --- /dev/null
 +++ b/VR_README.md
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,75 @@
 +# sm64coopdx VR - notes
 +
 +Technical notes for the VR build. If you just want to play, the main README covers that.
@@ -160,26 +151,19 @@ index 0000000..c672bfd
 +## Running it
 +
 +Run sm64coopdx.exe. Start your VR runtime first (Quest Link, Air Link, Virtual Desktop, or SteamVR)
-+if you want VR. You need your own SM64 US rom (.z64) in the folder or dragged onto the window. There's
-+no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
++if you want VR. Put your own SM64 US ROM in the folder named baserom.us.z64 (or drag any .z64 onto the
++window). There's no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
 +
 +You actually play with the usual coopdx input: a gamepad (DualSense, DS4, Xbox) or mouse and keyboard.
 +Head tracking drives the view. VR motion controllers aren't hooked up yet, so for now movement and
 +buttons come from the controller or keyboard like the flat game.
 +
-+### VR tuning keys (keyboard, while playing)
++### VR settings (in-game)
 +
-+| Key | What |
-+|-----|------|
-+| F1 / F2 | world bigger / smaller |
-+| F3 / F4 | world closer / farther |
-+| F5 / F6 | world down / up |
-+| F7 | reset and recenter |
-+| F8 / F9 | less / more stereo depth |
-+| F10 | cycle preset (diorama / close-up / first-person) |
-+| [ / ] | steadier / more head parallax |
-+
-+Whatever you tune gets saved to vr_tune.txt next to the exe.
++All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set view
++distance, size, height, stereo depth, head motion, first person, and camera anti-clip, with a Reset
++to Default button. The one keyboard shortcut is F10, which cycles the view (diorama / close-up /
++first-person).
 +
 +## Building
 +
@@ -209,8 +193,8 @@ index 0000000..c672bfd
 +## Where the VR code lives
 +
 +- src/pc/vr/vr.c, vr.h - the OpenXR work: session setup, per-eye view/projection matrices, stereo,
-+  head-tracking damping, the sky-dome matrix, the menu panel, tuning keys, frame submit, and the
-+  startup headset check.
++  head-tracking damping, the sky-dome matrix, the menu panel, the geometry anti-clip, the F10 view
++  cycle, frame submit, and the startup headset check.
 +- src/pc/gfx/gfx_pc.c, gfx_opengl.c - the per-eye / sky-dome / flat-panel render paths.
 +- src/game/skybox.c - builds the 3D sky sphere for VR.
 +- src/pc/pc_main.c - the VR frame loop and the auto-detect.
@@ -278,7 +262,7 @@ index 0000000..7625268
 +pause
 diff --git a/make_vr_dist.bat b/make_vr_dist.bat
 new file mode 100644
-index 0000000..be1353e
+index 0000000..5d4873d
 --- /dev/null
 +++ b/make_vr_dist.bat
 @@ -0,0 +1,81 @@
@@ -334,8 +318,8 @@ index 0000000..be1353e
 +> "%DIST%\READ_ME_FIRST.txt" echo sm64coopdx VR - complete edition
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo HOW TO PLAY:
-+>>"%DIST%\READ_ME_FIRST.txt" echo  1. Put your own Super Mario 64 US ROM (a .z64 file) into THIS folder.
-+>>"%DIST%\READ_ME_FIRST.txt" echo     (Or drag it onto the window the first time you run the game.)
++>>"%DIST%\READ_ME_FIRST.txt" echo  1. Put your own Super Mario 64 US ROM into THIS folder, named baserom.us.z64.
++>>"%DIST%\READ_ME_FIRST.txt" echo     (Or drag any .z64 onto the window the first time you run the game.)
 +>>"%DIST%\READ_ME_FIRST.txt" echo  2. If you have a VR headset: start your PCVR / OpenXR runtime first
 +>>"%DIST%\READ_ME_FIRST.txt" echo     (Quest Link, Virtual Desktop, or SteamVR).
 +>>"%DIST%\READ_ME_FIRST.txt" echo  3. Run sm64coopdx.exe.
@@ -347,8 +331,8 @@ index 0000000..be1353e
 +>>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
 +>>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
-+>>"%DIST%\READ_ME_FIRST.txt" echo VR view keys: F10 cycle view, F3/F4 distance, F1/F2 size, F7 recenter.
-+>>"%DIST%\READ_ME_FIRST.txt" echo See VR_README.md for the full guide.
++>>"%DIST%\READ_ME_FIRST.txt" echo VR settings are in-game: pause and open VR (right after Mod Menu). F10 cycles
++>>"%DIST%\READ_ME_FIRST.txt" echo the view (diorama / close-up / first-person). See VR_README.md for the full guide.
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo This download contains NO Nintendo files. coopdx reads Super Mario 64's
 +>>"%DIST%\READ_ME_FIRST.txt" echo textures and audio from YOUR OWN ROM at runtime - you must own the game.
