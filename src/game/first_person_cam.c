@@ -24,6 +24,7 @@ struct FirstPersonCamera gFirstPersonCamera = {
     .forceYaw = false,
     .forceRoll = true,
     .centerL = true,
+    .showBody = false,
     .pitch = 0,
     .yaw = 0,
     .crouch = 0,
@@ -180,7 +181,14 @@ void first_person_update(void) {
             level_trigger_warp(m, WARP_OP_LOOK_UP);
         }
 
-        m->marioBodyState->modelState = 0x100;
+        if (gFirstPersonCamera.showBody) {
+            // Show the body: clear only the alpha-hide bit so torso/arms/legs render. The head
+            // subtree is hidden separately in geo_mario_head_rotation so it can't fill the view.
+            // Clearing only 0x100 keeps the cap-effect high byte (wing/vanish/metal) intact.
+            m->marioBodyState->modelState &= ~0x100;
+        } else {
+            m->marioBodyState->modelState = 0x100; // fully invisible (the original first-person look)
+        }
         if (m->heldObj) {
             Vec3f camDir = {
                 m->area->camera->focus[0] - m->area->camera->pos[0],
@@ -199,6 +207,7 @@ void first_person_update(void) {
 void first_person_reset(void) {
     gFirstPersonCamera.forceRoll = false;
     gFirstPersonCamera.centerL = true;
+    gFirstPersonCamera.showBody = false;
     gFirstPersonCamera.pitch = 0;
     gFirstPersonCamera.yaw = 0;
     gFirstPersonCamera.crouch = 0;

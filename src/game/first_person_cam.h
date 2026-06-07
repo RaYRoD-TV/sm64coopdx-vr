@@ -14,6 +14,7 @@ struct FirstPersonCamera {
     bool forceYaw;
     bool forceRoll;
     bool centerL;
+    bool showBody;   // first-person: render Mario's torso/arms/legs (head stays hidden so it can't block the view)
     s16 pitch;
     s16 yaw;
     f32 crouch;
