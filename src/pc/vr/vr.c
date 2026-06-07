@@ -546,7 +546,8 @@ typedef struct { const char *name; float scale, dist, height, stereo; } VrPreset
 static const VrPreset sPresets[] = {
     { "Diorama",      1200.0f,  0.37f, -0.20f, 0.21f },
     { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f },
-    { "First-person", 1200.0f, -0.88f,  0.00f, 0.21f },
+    // The old "First-person" entry was just a very close diorama, not real first person.
+    // Removed for now; true first-person VR (camera at Mario's head, 1:1 scale) is the goal.
 };
 #define VR_NUM_PRESETS ((int)(sizeof(sPresets) / sizeof(sPresets[0])))
 static int sCurrentPreset = 1; // launch default = Close-up

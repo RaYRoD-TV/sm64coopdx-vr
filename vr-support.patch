@@ -1096,7 +1096,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..ade8ca3 100644
+index 0d4f9f7..413bba7 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1137,7 +1137,7 @@ index 0d4f9f7..ade8ca3 100644
      switch (backend) {
          case GAPI_GL:
              gWindowApi = &gfx_sdl;
-@@ -256,6 +266,25 @@ static void select_graphics_backend(void) {
+@@ -256,6 +266,27 @@ static void select_graphics_backend(void) {
      }
  }
  
@@ -1149,8 +1149,10 @@ index 0d4f9f7..ade8ca3 100644
 +//            pause + course-grid + course-complete, credits, attract-mode demo)
 +//   FALSE -> active gameplay: keep the existing diorama + sky dome + HUD path (unchanged)
 +static bool vr_frame_is_nongameplay(void) {
-+    extern bool gDjuiInMainMenu; // pc/djui/djui.h
++    extern bool gDjuiInMainMenu;        // pc/djui/djui.h
++    extern bool djui_panel_is_active(void); // pc/djui/djui_panel.h - any DJUI panel open (player, dynos, pause, options)
 +    if (gDjuiInMainMenu)                   return true; // title / main menu / connect / options (3D backdrop)
++    if (djui_panel_is_active())            return true; // in-game menus: Player, DynOS, pause, options, etc.
 +    if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)
 +    if (gCurrCreditsEntry != NULL)         return true; // credits / ending
 +    if (gCurrDemoInput != NULL)            return true; // attract-mode demo
@@ -1163,7 +1165,7 @@ index 0d4f9f7..ade8ca3 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +319,46 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +321,46 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1210,7 +1212,7 @@ index 0d4f9f7..ade8ca3 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +517,7 @@ void game_deinit(void) {
+@@ -452,6 +519,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1218,7 +1220,7 @@ index 0d4f9f7..ade8ca3 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +570,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +572,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -1236,10 +1238,10 @@ index 0d4f9f7..ade8ca3 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..989f725
+index 0000000..c4b0e6d
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,849 @@
+@@ -0,0 +1,850 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -1788,7 +1790,8 @@ index 0000000..989f725
 +static const VrPreset sPresets[] = {
 +    { "Diorama",      1200.0f,  0.37f, -0.20f, 0.21f },
 +    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f },
-+    { "First-person", 1200.0f, -0.88f,  0.00f, 0.21f },
++    // The old "First-person" entry was just a very close diorama, not real first person.
++    // Removed for now; true first-person VR (camera at Mario's head, 1:1 scale) is the goal.
 +};
 +#define VR_NUM_PRESETS ((int)(sizeof(sPresets) / sizeof(sPresets[0])))
 +static int sCurrentPreset = 1; // launch default = Close-up

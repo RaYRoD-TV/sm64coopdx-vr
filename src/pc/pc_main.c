@@ -274,8 +274,10 @@ static void select_graphics_backend(void) {
 //            pause + course-grid + course-complete, credits, attract-mode demo)
 //   FALSE -> active gameplay: keep the existing diorama + sky dome + HUD path (unchanged)
 static bool vr_frame_is_nongameplay(void) {
-    extern bool gDjuiInMainMenu; // pc/djui/djui.h
+    extern bool gDjuiInMainMenu;        // pc/djui/djui.h
+    extern bool djui_panel_is_active(void); // pc/djui/djui_panel.h - any DJUI panel open (player, dynos, pause, options)
     if (gDjuiInMainMenu)                   return true; // title / main menu / connect / options (3D backdrop)
+    if (djui_panel_is_active())            return true; // in-game menus: Player, DynOS, pause, options, etc.
     if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)
     if (gCurrCreditsEntry != NULL)         return true; // credits / ending
     if (gCurrDemoInput != NULL)            return true; // attract-mode demo
