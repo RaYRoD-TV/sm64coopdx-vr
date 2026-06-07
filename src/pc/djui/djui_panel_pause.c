@@ -9,6 +9,7 @@
 #include "djui_panel_menu.h"
 #include "djui_panel_confirm.h"
 #include "djui_panel_mod_menu.h"
+#include "djui_panel_vr.h"
 #include "pc/pc_main.h"
 #include "pc/network/network.h"
 #include "pc/lua/smlua_hooks.h"
@@ -106,6 +107,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
         } else if (gHookedModMenuElementsCount > 0) {
             djui_button_create(body, DLANG(PAUSE, MOD_MENU), DJUI_BUTTON_STYLE_NORMAL, djui_panel_mod_menu_create);
         }
+
+        // VR settings, ordered right after the Mod Menu.
+        djui_button_create(body, "VR", DJUI_BUTTON_STYLE_NORMAL, djui_panel_vr_create);
 
         djui_button_create(body, DLANG(PAUSE, RESUME), DJUI_BUTTON_STYLE_NORMAL, djui_panel_pause_resume);
 

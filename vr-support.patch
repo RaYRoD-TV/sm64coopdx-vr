@@ -788,26 +788,28 @@ index 2088913..4d86ae5 100644
  
  // display settings
  enum GraphicsBackend configGraphicsBackend        = GAPI_GL;
-diff --git a/src/pc/djui/djui_panel_options.c b/src/pc/djui/djui_panel_options.c
-index 37e8ea1..4691d0d 100644
---- a/src/pc/djui/djui_panel_options.c
-+++ b/src/pc/djui/djui_panel_options.c
-@@ -8,6 +8,7 @@
- #include "djui_panel_misc.h"
+diff --git a/src/pc/djui/djui_panel_pause.c b/src/pc/djui/djui_panel_pause.c
+index 6a4c2ef..b772b91 100644
+--- a/src/pc/djui/djui_panel_pause.c
++++ b/src/pc/djui/djui_panel_pause.c
+@@ -9,6 +9,7 @@
  #include "djui_panel_menu.h"
- #include "djui_panel_dynos.h"
+ #include "djui_panel_confirm.h"
+ #include "djui_panel_mod_menu.h"
 +#include "djui_panel_vr.h"
- #include "pc/network/network.h"
- #include "pc/utils/misc.h"
  #include "pc/pc_main.h"
-@@ -33,6 +34,7 @@ void djui_panel_options_create(struct DjuiBase* caller) {
-         djui_button_create(body, DLANG(OPTIONS, DISPLAY), DJUI_BUTTON_STYLE_NORMAL, djui_panel_display_create);
-         djui_button_create(body, DLANG(OPTIONS, SOUND), DJUI_BUTTON_STYLE_NORMAL, djui_panel_sound_create);
-         djui_button_create(body, DLANG(OPTIONS, MISC), DJUI_BUTTON_STYLE_NORMAL, djui_panel_misc_create);
-+        djui_button_create(body, "VR", DJUI_BUTTON_STYLE_NORMAL, djui_panel_vr_create);
-         djui_button_create(body, DLANG(MENU, BACK), DJUI_BUTTON_STYLE_BACK, djui_panel_options_back);
-     }
+ #include "pc/network/network.h"
+ #include "pc/lua/smlua_hooks.h"
+@@ -107,6 +108,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
+             djui_button_create(body, DLANG(PAUSE, MOD_MENU), DJUI_BUTTON_STYLE_NORMAL, djui_panel_mod_menu_create);
+         }
  
++        // VR settings, ordered right after the Mod Menu.
++        djui_button_create(body, "VR", DJUI_BUTTON_STYLE_NORMAL, djui_panel_vr_create);
++
+         djui_button_create(body, DLANG(PAUSE, RESUME), DJUI_BUTTON_STYLE_NORMAL, djui_panel_pause_resume);
+ 
+         if (gNetworkType == NT_SERVER) {
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
 index 0000000..979523b
