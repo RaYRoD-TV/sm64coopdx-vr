@@ -3,10 +3,12 @@ title Package sm64coopdx VR (complete download)
 REM ===========================================================================
 REM  Builds the COMPLETE standalone VR release: "unzip, add your ROM, run".
 REM
-REM  Contents: the VR sm64coopdx.exe + the two needed DLLs (libopenxr_loader.dll,
-REM  discord_game_sdk.dll) + coopdx's runtime data folders (mods, lang, dynos,
-REM  palettes) + a readme. NO .bat files, NO updater (so it can't replace the VR
-REM  exe), and NO Nintendo files - the player adds their OWN .z64 ROM at runtime.
+REM  Contents: the VR sm64coopdx.exe + its DLLs (libopenxr_loader.dll, plus the
+REM  MinGW runtime DLLs the OpenXR loader links - libgcc_s_seh-1, libstdc++-6,
+REM  libwinpthread-1 - and discord_game_sdk.dll) + coopdx's runtime data folders
+REM  (mods, lang, dynos, palettes) + a readme. NO .bat files, NO updater (so it
+REM  can't replace the VR exe), and NO Nintendo files - the player adds their OWN
+REM  .z64 ROM at runtime.
 REM
 REM  Shareable: the exe contains no Nintendo assets (coopdx loads them from the
 REM  player's own ROM at runtime), exactly like the official sm64coopdx download.
@@ -30,8 +32,12 @@ mkdir "%DIST%"
 echo Copying exe + DLLs ...
 copy /y "%SRC%\sm64coopdx.exe"        "%DIST%\" >nul
 copy /y "%SRC%\libopenxr_loader.dll"  "%DIST%\" >nul
+copy /y "%SRC%\libgcc_s_seh-1.dll"    "%DIST%\" >nul
+copy /y "%SRC%\libstdc++-6.dll"       "%DIST%\" >nul
+copy /y "%SRC%\libwinpthread-1.dll"   "%DIST%\" >nul
 copy /y "%SRC%\discord_game_sdk.dll"  "%DIST%\" >nul
 copy /y "VR_README.md"                "%DIST%\" >nul
+if not exist "%DIST%\libgcc_s_seh-1.dll" ( echo ERROR: MinGW runtime DLLs missing from %SRC%. & pause & exit /b 1 )
 
 echo Copying coopdx runtime data ^(mods, lang, dynos, palettes^) ...
 robocopy "%SRC%\mods"     "%DIST%\mods"     /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul

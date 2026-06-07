@@ -23,8 +23,9 @@ If a headset is connected it boots into VR, otherwise you get the flat game. Sta
 first (Quest Link, Virtual Desktop, SteamVR) if you want VR. Your mods and saves carry over like
 normal.
 
-Already have sm64coopdx installed? You can skip the zip and just drop the release's sm64coopdx.exe
-and libopenxr_loader.dll into your existing folder.
+Already have sm64coopdx installed? You can skip the unzip step and just copy the exe plus all the
+DLLs from the release (libopenxr_loader.dll and the libgcc/libstdc++/libwinpthread ones next to it)
+into your existing folder.
 
 ## Controls
 

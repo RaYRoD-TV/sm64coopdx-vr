@@ -48,8 +48,10 @@ Same as a normal sm64coopdx build (MSYS2 + MinGW), plus one extra package for Op
 Then run build_vr.bat, or just `make` from an MSYS2 MINGW64 shell. build_vr.bat installs that package
 for you if it's missing.
 
-The MinGW runtime is linked statically, so the only extra DLL the exe needs over a stock coopdx is
-libopenxr_loader.dll. discord_game_sdk.dll already ships with coopdx.
+The exe itself is statically linked, but the OpenXR loader (libopenxr_loader.dll) is built with MinGW
+and pulls in the MinGW runtime DLLs, so these four need to sit next to the exe: libopenxr_loader.dll,
+libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll. discord_game_sdk.dll already ships with
+coopdx. The build stages all of them in build/us_pc.
 
 ## Sharing
 

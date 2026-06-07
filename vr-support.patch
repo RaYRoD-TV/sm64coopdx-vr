@@ -50,10 +50,10 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..7959ae2 100644
+index 16ae934..8e13fea 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,66 @@
+@@ -1,22 +1,67 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
@@ -88,8 +88,9 @@ index 16ae934..7959ae2 100644
 +normal.
  
 -sm64coopdx is moddable via Lua, similar to Roblox and Garry's Mod's Lua APIs. To get started, click [here](docs/lua/lua.md) to see the Lua documentation. If you want to contribute to the repo, you can view the C documentation [here](docs/c/c.md).
-+Already have sm64coopdx installed? You can skip the zip and just drop the release's sm64coopdx.exe
-+and libopenxr_loader.dll into your existing folder.
++Already have sm64coopdx installed? You can skip the unzip step and just copy the exe plus all the
++DLLs from the release (libopenxr_loader.dll and the libgcc/libstdc++/libwinpthread ones next to it)
++into your existing folder.
  
 -## Wiki
 -The wiki is made using GitHub's wiki feature, you can go to the wiki tab or click [here](https://github.com/coop-deluxe/sm64coopdx/wiki).
@@ -135,10 +136,10 @@ index 16ae934..7959ae2 100644
 +by RaYRoD.
 diff --git a/VR_README.md b/VR_README.md
 new file mode 100644
-index 0000000..25ff51d
+index 0000000..c672bfd
 --- /dev/null
 +++ b/VR_README.md
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,82 @@
 +# sm64coopdx VR - notes
 +
 +Technical notes for the VR build. If you just want to play, the main README covers that.
@@ -189,8 +190,10 @@ index 0000000..25ff51d
 +Then run build_vr.bat, or just `make` from an MSYS2 MINGW64 shell. build_vr.bat installs that package
 +for you if it's missing.
 +
-+The MinGW runtime is linked statically, so the only extra DLL the exe needs over a stock coopdx is
-+libopenxr_loader.dll. discord_game_sdk.dll already ships with coopdx.
++The exe itself is statically linked, but the OpenXR loader (libopenxr_loader.dll) is built with MinGW
++and pulls in the MinGW runtime DLLs, so these four need to sit next to the exe: libopenxr_loader.dll,
++libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll. discord_game_sdk.dll already ships with
++coopdx. The build stages all of them in build/us_pc.
 +
 +## Sharing
 +
@@ -275,19 +278,21 @@ index 0000000..7625268
 +pause
 diff --git a/make_vr_dist.bat b/make_vr_dist.bat
 new file mode 100644
-index 0000000..246135a
+index 0000000..be1353e
 --- /dev/null
 +++ b/make_vr_dist.bat
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,81 @@
 +@echo off
 +title Package sm64coopdx VR (complete download)
 +REM ===========================================================================
 +REM  Builds the COMPLETE standalone VR release: "unzip, add your ROM, run".
 +REM
-+REM  Contents: the VR sm64coopdx.exe + the two needed DLLs (libopenxr_loader.dll,
-+REM  discord_game_sdk.dll) + coopdx's runtime data folders (mods, lang, dynos,
-+REM  palettes) + a readme. NO .bat files, NO updater (so it can't replace the VR
-+REM  exe), and NO Nintendo files - the player adds their OWN .z64 ROM at runtime.
++REM  Contents: the VR sm64coopdx.exe + its DLLs (libopenxr_loader.dll, plus the
++REM  MinGW runtime DLLs the OpenXR loader links - libgcc_s_seh-1, libstdc++-6,
++REM  libwinpthread-1 - and discord_game_sdk.dll) + coopdx's runtime data folders
++REM  (mods, lang, dynos, palettes) + a readme. NO .bat files, NO updater (so it
++REM  can't replace the VR exe), and NO Nintendo files - the player adds their OWN
++REM  .z64 ROM at runtime.
 +REM
 +REM  Shareable: the exe contains no Nintendo assets (coopdx loads them from the
 +REM  player's own ROM at runtime), exactly like the official sm64coopdx download.
@@ -311,8 +316,12 @@ index 0000000..246135a
 +echo Copying exe + DLLs ...
 +copy /y "%SRC%\sm64coopdx.exe"        "%DIST%\" >nul
 +copy /y "%SRC%\libopenxr_loader.dll"  "%DIST%\" >nul
++copy /y "%SRC%\libgcc_s_seh-1.dll"    "%DIST%\" >nul
++copy /y "%SRC%\libstdc++-6.dll"       "%DIST%\" >nul
++copy /y "%SRC%\libwinpthread-1.dll"   "%DIST%\" >nul
 +copy /y "%SRC%\discord_game_sdk.dll"  "%DIST%\" >nul
 +copy /y "VR_README.md"                "%DIST%\" >nul
++if not exist "%DIST%\libgcc_s_seh-1.dll" ( echo ERROR: MinGW runtime DLLs missing from %SRC%. & pause & exit /b 1 )
 +
 +echo Copying coopdx runtime data ^(mods, lang, dynos, palettes^) ...
 +robocopy "%SRC%\mods"     "%DIST%\mods"     /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
