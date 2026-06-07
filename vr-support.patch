@@ -1096,7 +1096,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..413bba7 100644
+index 0d4f9f7..ee74111 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1165,7 +1165,7 @@ index 0d4f9f7..413bba7 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +321,46 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +321,55 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1176,6 +1176,15 @@ index 0d4f9f7..413bba7 100644
          gfx_end_frame_render();
 +        if (vr_is_active()) {
 +            Gfx *vrDl = (Gfx *) gGfxSPTask->task.t.data_ptr;
++            // EXPERIMENTAL first-person: when the VR toggle (F11) is on, turn on coopdx's first-person
++            // camera so the game renders from Mario's head. Only act on change so we don't fight the
++            // game's own first-person handling every frame.
++            {
++                extern void set_first_person_enabled(bool enable); // game/first_person_cam.h
++                static bool sVrFpPrev = false;
++                bool vrFp = vr_first_person_active();
++                if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
++            }
 +            if (vr_frame_is_nongameplay()) {
 +                // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
 +                // no diorama, no 2D/3D split) once into the panel swapchain and submit it as the
@@ -1212,7 +1221,7 @@ index 0d4f9f7..413bba7 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +519,7 @@ void game_deinit(void) {
+@@ -452,6 +528,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1220,7 +1229,7 @@ index 0d4f9f7..413bba7 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +572,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +581,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -1238,10 +1247,10 @@ index 0d4f9f7..413bba7 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..c4b0e6d
+index 0000000..d7fafc4
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,850 @@
+@@ -0,0 +1,879 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -1350,6 +1359,12 @@ index 0000000..c4b0e6d
 +static float sMenuDist    = 3.0f;       // menu panel distance (head-locked, -Z in VIEW); pushed back from 2.0
 +static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; raise to overfill the FOV)
 +
++// EXPERIMENTAL true first-person (F11). Enables coopdx's first-person camera (puts the game camera at
++// Mario's head) and renders the world life-size at 1:1 instead of the shrunk diorama. Free-look: the
++// headset looks around freely, the stick still moves and turns Mario like the flat game. Off by default;
++// not a shipped preset yet because it still needs in-headset tuning (scale, stereo, comfort).
++static bool sFirstPerson = false;
++
 +// Per-eye camera-space -> eye-clip matrices (row-vector; clip = p_cam * sEyeVP).
 +static float sEyeVP[2][4][4];
 +static float sSkyVP[2][4][4]; // rotation-only sky view-proj for the eye-sphere dome (at infinity)
@@ -1368,6 +1383,7 @@ index 0000000..c4b0e6d
 +static PFN_xrGetOpenGLGraphicsRequirementsKHR pfnGetGLReq = NULL;
 +
 +bool vr_is_active(void)      { return sRunning; }
++bool vr_first_person_active(void) { return sFirstPerson; }
 +int  vr_eye_count(void)      { return (int)sViewCount; }
 +int  vr_eye_width(int eye)   { return (eye >= 0 && eye < 2) ? (int)sEye[eye].w : 0; }
 +int  vr_eye_height(int eye)  { return (eye >= 0 && eye < 2) ? (int)sEye[eye].h : 0; }
@@ -1462,7 +1478,9 @@ index 0000000..c4b0e6d
 +    float adx = dcx, ady = dcy - sDioramaHeight, adz = dcz + sDioramaDist;
 +    float headToAnchor = sqrtf(adx*adx + ady*ady + adz*adz);
 +    float effDist = sDioramaDist;
-+    if (headToAnchor < sClipMargin) effDist += (sClipMargin - headToAnchor);
++    // First-person puts the eye AT the camera (anchor distance ~0), so the diorama anti-clip would
++    // shove the world away from your face. Skip it in first-person.
++    if (!sFirstPerson && headToAnchor < sClipMargin) effDist += (sClipMargin - headToAnchor);
 +
 +    float A[4][4] = {{0}};
 +    float invS = 1.0f / sDioramaScale;
@@ -1821,6 +1839,25 @@ index 0000000..c4b0e6d
 +    if (cyc && !prevCycle) vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS);
 +    prevCycle = cyc;
 +
++    // F11 toggles EXPERIMENTAL true first-person. On: life-size 1:1, eye at the camera, full 6DoF,
++    // and the game's first-person camera (camera at Mario's head) is enabled by pc_main. Off: restore
++    // the current diorama preset. Starting values are rough; tune live with F1/F2 (scale), F8/F9
++    // (stereo), [ / ] (head damping).
++    static bool prevFp = false;
++    bool fpKey = ks[SDL_SCANCODE_F11] != 0;
++    if (fpKey && !prevFp) {
++        sFirstPerson = !sFirstPerson;
++        if (sFirstPerson) {
++            sDioramaScale = 100.0f; sDioramaDist = 0.0f; sDioramaHeight = 0.0f;
++            sStereoScale = 0.5f; sHeadScale = 1.0f; sHeadRestSet = false; sHeadWarmup = 0;
++            printf("[VR] first-person ON (experimental). Life-size, eye at Mario's head. Tune: F1/F2 scale, F8/F9 stereo.\n");
++        } else {
++            vr_apply_preset(sCurrentPreset); sHeadScale = 0.4f; sHeadRestSet = false; sHeadWarmup = 0;
++            printf("[VR] first-person OFF. Back to %s.\n", sPresets[sCurrentPreset].name);
++        }
++    }
++    prevFp = fpKey;
++
 +    bool changed = false;
 +    if (ks[SDL_SCANCODE_F1]) { sDioramaScale  *= 0.98f; changed = true; } // bigger world
 +    if (ks[SDL_SCANCODE_F2]) { sDioramaScale  *= 1.02f; changed = true; } // smaller world
@@ -2077,6 +2114,7 @@ index 0000000..c4b0e6d
 +
 +bool  vr_is_active(void)     { return false; }
 +bool  vr_headset_present(void) { return false; }
++bool  vr_first_person_active(void) { return false; }
 +int   vr_eye_count(void)     { return 0; }
 +int   vr_eye_width(int e)    { (void)e; return 0; }
 +int   vr_eye_height(int e)   { (void)e; return 0; }
@@ -2094,10 +2132,10 @@ index 0000000..c4b0e6d
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..024e6de
+index 0000000..8b1416a
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,60 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -2116,6 +2154,10 @@ index 0000000..024e6de
 +
 +// Is an OpenXR session live and actively rendering?
 +bool  vr_is_active(void);
++
++// EXPERIMENTAL: is true first-person mode on (F11)? When true the caller should enable the game's
++// first-person camera so the viewpoint sits at Mario's head; VR then renders it life-size.
++bool  vr_first_person_active(void);
 +
 +// Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 +// per-eye views. Call once before the eye loop.

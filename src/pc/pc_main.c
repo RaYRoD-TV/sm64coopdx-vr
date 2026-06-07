@@ -328,6 +328,15 @@ void produce_interpolation_frames_and_delay(void) {
         gfx_end_frame_render();
         if (vr_is_active()) {
             Gfx *vrDl = (Gfx *) gGfxSPTask->task.t.data_ptr;
+            // EXPERIMENTAL first-person: when the VR toggle (F11) is on, turn on coopdx's first-person
+            // camera so the game renders from Mario's head. Only act on change so we don't fight the
+            // game's own first-person handling every frame.
+            {
+                extern void set_first_person_enabled(bool enable); // game/first_person_cam.h
+                static bool sVrFpPrev = false;
+                bool vrFp = vr_first_person_active();
+                if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
+            }
             if (vr_frame_is_nongameplay()) {
                 // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
                 // no diorama, no 2D/3D split) once into the panel swapchain and submit it as the

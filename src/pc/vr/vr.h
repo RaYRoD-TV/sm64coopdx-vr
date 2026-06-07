@@ -17,6 +17,10 @@ bool  vr_headset_present(void);
 // Is an OpenXR session live and actively rendering?
 bool  vr_is_active(void);
 
+// EXPERIMENTAL: is true first-person mode on (F11)? When true the caller should enable the game's
+// first-person camera so the viewpoint sits at Mario's head; VR then renders it life-size.
+bool  vr_first_person_active(void);
+
 // Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 // per-eye views. Call once before the eye loop.
 void  vr_begin_frame(void);

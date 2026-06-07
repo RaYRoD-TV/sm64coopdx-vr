@@ -106,6 +106,12 @@ static float sHudSize     = 2.4f;       // HUD panel width in meters (height fol
 static float sMenuDist    = 3.0f;       // menu panel distance (head-locked, -Z in VIEW); pushed back from 2.0
 static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; raise to overfill the FOV)
 
+// EXPERIMENTAL true first-person (F11). Enables coopdx's first-person camera (puts the game camera at
+// Mario's head) and renders the world life-size at 1:1 instead of the shrunk diorama. Free-look: the
+// headset looks around freely, the stick still moves and turns Mario like the flat game. Off by default;
+// not a shipped preset yet because it still needs in-headset tuning (scale, stereo, comfort).
+static bool sFirstPerson = false;
+
 // Per-eye camera-space -> eye-clip matrices (row-vector; clip = p_cam * sEyeVP).
 static float sEyeVP[2][4][4];
 static float sSkyVP[2][4][4]; // rotation-only sky view-proj for the eye-sphere dome (at infinity)
@@ -124,6 +130,7 @@ static XrFovf  sRenderFov[2]; // symmetrized fov actually rendered + submitted
 static PFN_xrGetOpenGLGraphicsRequirementsKHR pfnGetGLReq = NULL;
 
 bool vr_is_active(void)      { return sRunning; }
+bool vr_first_person_active(void) { return sFirstPerson; }
 int  vr_eye_count(void)      { return (int)sViewCount; }
 int  vr_eye_width(int eye)   { return (eye >= 0 && eye < 2) ? (int)sEye[eye].w : 0; }
 int  vr_eye_height(int eye)  { return (eye >= 0 && eye < 2) ? (int)sEye[eye].h : 0; }
@@ -218,7 +225,9 @@ static void vr_build_eye_matrix(int eye) {
     float adx = dcx, ady = dcy - sDioramaHeight, adz = dcz + sDioramaDist;
     float headToAnchor = sqrtf(adx*adx + ady*ady + adz*adz);
     float effDist = sDioramaDist;
-    if (headToAnchor < sClipMargin) effDist += (sClipMargin - headToAnchor);
+    // First-person puts the eye AT the camera (anchor distance ~0), so the diorama anti-clip would
+    // shove the world away from your face. Skip it in first-person.
+    if (!sFirstPerson && headToAnchor < sClipMargin) effDist += (sClipMargin - headToAnchor);
 
     float A[4][4] = {{0}};
     float invS = 1.0f / sDioramaScale;
@@ -577,6 +586,25 @@ static void vr_poll_tuning_keys(void) {
     if (cyc && !prevCycle) vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS);
     prevCycle = cyc;
 
+    // F11 toggles EXPERIMENTAL true first-person. On: life-size 1:1, eye at the camera, full 6DoF,
+    // and the game's first-person camera (camera at Mario's head) is enabled by pc_main. Off: restore
+    // the current diorama preset. Starting values are rough; tune live with F1/F2 (scale), F8/F9
+    // (stereo), [ / ] (head damping).
+    static bool prevFp = false;
+    bool fpKey = ks[SDL_SCANCODE_F11] != 0;
+    if (fpKey && !prevFp) {
+        sFirstPerson = !sFirstPerson;
+        if (sFirstPerson) {
+            sDioramaScale = 100.0f; sDioramaDist = 0.0f; sDioramaHeight = 0.0f;
+            sStereoScale = 0.5f; sHeadScale = 1.0f; sHeadRestSet = false; sHeadWarmup = 0;
+            printf("[VR] first-person ON (experimental). Life-size, eye at Mario's head. Tune: F1/F2 scale, F8/F9 stereo.\n");
+        } else {
+            vr_apply_preset(sCurrentPreset); sHeadScale = 0.4f; sHeadRestSet = false; sHeadWarmup = 0;
+            printf("[VR] first-person OFF. Back to %s.\n", sPresets[sCurrentPreset].name);
+        }
+    }
+    prevFp = fpKey;
+
     bool changed = false;
     if (ks[SDL_SCANCODE_F1]) { sDioramaScale  *= 0.98f; changed = true; } // bigger world
     if (ks[SDL_SCANCODE_F2]) { sDioramaScale  *= 1.02f; changed = true; } // smaller world
@@ -833,6 +861,7 @@ void vr_shutdown(void) {
 
 bool  vr_is_active(void)     { return false; }
 bool  vr_headset_present(void) { return false; }
+bool  vr_first_person_active(void) { return false; }
 int   vr_eye_count(void)     { return 0; }
 int   vr_eye_width(int e)    { (void)e; return 0; }
 int   vr_eye_height(int e)   { (void)e; return 0; }
