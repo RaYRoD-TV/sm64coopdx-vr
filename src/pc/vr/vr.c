@@ -47,7 +47,8 @@ static XrSessionState sState      = XR_SESSION_STATE_UNKNOWN;
 static bool sBootTried  = false; // boot attempted (success or fail) - don't retry every frame
 static bool sRunning    = false; // session is between xrBeginSession/xrEndSession
 static bool sFrameBegun = false; // xrBeginFrame issued, owes an xrEndFrame
-static bool sViewsValid = false; // sViews holds valid per-eye poses for this frame
+static bool sViewsValid = false; // sViews holds per-eye poses for this frame (xrLocateViews succeeded)
+static bool sPoseTracked = false; // the runtime reports the head pose as actually tracked (not just predicted/zero)
 
 static XrFrameState            sFrameState;
 static uint32_t                sViewCount = 0;
@@ -596,9 +597,21 @@ float vr_get_diorama_scale(void)     { return sDioramaScale; }
 void  vr_set_diorama_scale(float v)  { sDioramaScale = (v < 30.0f) ? 30.0f : v; }
 float vr_get_stereo(void)            { return sStereoScale; }
 void  vr_set_stereo(float v)         { sStereoScale = (v < 0.0f) ? 0.0f : v; }
+float vr_get_diorama_height(void)    { return sDioramaHeight; }
+void  vr_set_diorama_height(float v) { sDioramaHeight = v; }
+float vr_get_head_scale(void)        { return sHeadScale; }
+void  vr_set_head_scale(float v)     { sHeadScale = (v < 0.0f) ? 0.0f : (v > 1.5f ? 1.5f : v); }
 void  vr_set_first_person(bool on) {
     if (on) { vr_apply_preset(VR_NUM_PRESETS - 1); }   // the First-person preset
     else if (sFirstPerson) { vr_apply_preset(1); }      // back to Close-up
+}
+// Reset every VR tunable to its launch default (Close-up preset + default panel placement).
+void vr_reset_defaults(void) {
+    vr_apply_preset(1);     // Close-up: resets scale/dist/height/stereo/first-person/head-damping
+    sMenuDist = 3.0f;
+    sMenuSize = 4.8f;
+    sPanelAnchorValid = false;
+    printf("[VR] reset to defaults.\n");
 }
 
 // The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
@@ -621,6 +634,7 @@ void vr_begin_frame(void) {
     vr_poll_events();
     vr_poll_tuning_keys();
     sViewsValid = false;
+    sPoseTracked = false;
     sOverlayReady = false;
     sHudReady = false;
     sPanelMode = false;
@@ -646,6 +660,10 @@ void vr_begin_frame(void) {
         uint32_t got = 0;
         if (XR_SUCCEEDED(xrLocateViews(sSession, &vli, &vs, 2, &got, sViews)) && got == 2) {
             sViewsValid = true;
+            // Only treat the pose as usable for world-locking once the runtime says it's really tracked
+            // (at first boot the pose can be unset/zero for a few frames while tracking comes up).
+            sPoseTracked = (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0
+                        && (vs.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)    != 0;
             vr_build_eye_matrix(0);
             vr_build_eye_matrix(1);
             static bool sLoggedPose = false;
@@ -779,17 +797,27 @@ void vr_submit(void) {
             hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // match the frame aspect (16:9)
 
             if (sLocalSpace != XR_NULL_HANDLE) {
-                // World-locked: capture the head's yaw-only pose when the menu opens so the panel spawns
-                // dead-centered on your current facing, then stays put so you can turn your head to read
-                // the left/right of it (the Player/DynOS lists). Re-anchors each time a menu opens.
-                if (!sPanelAnchorValid && sViewsValid) {
-                    sPanelAnchorPos[0] = 0.5f * (sViews[0].pose.position.x + sViews[1].pose.position.x);
-                    sPanelAnchorPos[1] = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
-                    sPanelAnchorPos[2] = 0.5f * (sViews[0].pose.position.z + sViews[1].pose.position.z);
-                    float qy = sViews[0].pose.orientation.y, qw = sViews[0].pose.orientation.w;
-                    float n = sqrtf(qy*qy + qw*qw); if (n < 1e-6f) { qy = 0.0f; qw = 1.0f; n = 1.0f; }
-                    sPanelAnchorQy = qy / n; sPanelAnchorQw = qw / n;
-                    sPanelAnchorValid = true;
+                // World-locked, but smart about it: the panel re-anchors to the head's yaw-only pose
+                // (1) until the runtime reports a real tracked pose - so first boot doesn't freeze the
+                //     panel to an un-tracked/zero pose, and
+                // (2) whenever you turn your head more than ~55 degrees away from it - so it follows you
+                //     back into view instead of getting lost behind you.
+                // Otherwise it stays put, so within that window you can freely turn your head to read it.
+                if (sViewsValid) {
+                    float cqy = sViews[0].pose.orientation.y, cqw = sViews[0].pose.orientation.w;
+                    float cn = sqrtf(cqy*cqy + cqw*cqw); if (cn < 1e-6f) { cqy = 0.0f; cqw = 1.0f; cn = 1.0f; }
+                    cqy /= cn; cqw /= cn;
+                    float hfx = -2.0f * cqw * cqy, hfz = -(1.0f - 2.0f * cqy * cqy); // current head forward
+                    float afx = -2.0f * sPanelAnchorQw * sPanelAnchorQy, afz = -(1.0f - 2.0f * sPanelAnchorQy * sPanelAnchorQy);
+                    float dot = hfx * afx + hfz * afz; // ~cos(angle between head and panel)
+                    bool reAnchor = !sPanelAnchorValid || !sPoseTracked || (dot < 0.57f); // 0.57 ~= cos(55 deg)
+                    if (reAnchor) {
+                        sPanelAnchorPos[0] = 0.5f * (sViews[0].pose.position.x + sViews[1].pose.position.x);
+                        sPanelAnchorPos[1] = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
+                        sPanelAnchorPos[2] = 0.5f * (sViews[0].pose.position.z + sViews[1].pose.position.z);
+                        sPanelAnchorQy = cqy; sPanelAnchorQw = cqw;
+                        sPanelAnchorValid = sPoseTracked; // only "lock in" once the pose is real
+                    }
                 }
                 // Forward of the yaw-only quaternion Q=(0,qy,0,qw): R(Q)*(0,0,-1).
                 float qy = sPanelAnchorQy, qw = sPanelAnchorQw;
@@ -874,6 +902,9 @@ float vr_get_menu_size(void)         { return 0.0f; } void vr_set_menu_size(floa
 float vr_get_diorama_dist(void)      { return 0.0f; } void vr_set_diorama_dist(float v)  { (void)v; }
 float vr_get_diorama_scale(void)     { return 0.0f; } void vr_set_diorama_scale(float v) { (void)v; }
 float vr_get_stereo(void)            { return 0.0f; } void vr_set_stereo(float v)        { (void)v; }
+float vr_get_diorama_height(void)    { return 0.0f; } void vr_set_diorama_height(float v){ (void)v; }
+float vr_get_head_scale(void)        { return 0.0f; } void vr_set_head_scale(float v)    { (void)v; }
+void  vr_reset_defaults(void) {}
 int   vr_eye_count(void)     { return 0; }
 int   vr_eye_width(int e)    { (void)e; return 0; }
 int   vr_eye_height(int e)   { (void)e; return 0; }

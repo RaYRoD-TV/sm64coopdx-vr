@@ -28,6 +28,9 @@ float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu
 float vr_get_diorama_dist(void); void vr_set_diorama_dist(float v); // diorama anchor distance (meters)
 float vr_get_diorama_scale(void);void vr_set_diorama_scale(float v);// diorama scale (game units per meter; bigger=smaller world)
 float vr_get_stereo(void);       void vr_set_stereo(float v);       // stereo separation strength
+float vr_get_diorama_height(void); void vr_set_diorama_height(float v); // diorama height offset (meters)
+float vr_get_head_scale(void);   void vr_set_head_scale(float v);   // 6DoF head-motion damping (0=locked, 1=full)
+void  vr_reset_defaults(void);   // reset every VR tunable to launch defaults
 
 // Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 // per-eye views. Call once before the eye loop.
