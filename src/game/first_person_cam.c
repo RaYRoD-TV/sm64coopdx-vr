@@ -25,6 +25,7 @@ struct FirstPersonCamera gFirstPersonCamera = {
     .forceRoll = true,
     .centerL = true,
     .showBody = false,
+    .flipCam = false,
     .pitch = 0,
     .yaw = 0,
     .crouch = 0,
@@ -150,7 +151,10 @@ static void first_person_camera_update(void) {
     vec3f_copy(gLakituState.goalFocus, gLakituState.focus);
 
     // set other values
-    if (gFirstPersonCamera.forceRoll) {
+    s16 flipRoll = first_person_flip_roll(m);
+    if (flipRoll != 0) {
+        gLakituState.roll = flipRoll; // flatscreen: 2D screen roll (VR uses vr_set_flip_roll, set in pc_main)
+    } else if (gFirstPersonCamera.forceRoll) {
         gLakituState.roll = 0;
     }
     gLakituState.posHSpeed = 0;
@@ -208,6 +212,7 @@ void first_person_reset(void) {
     gFirstPersonCamera.forceRoll = false;
     gFirstPersonCamera.centerL = true;
     gFirstPersonCamera.showBody = false;
+    gFirstPersonCamera.flipCam = false;
     gFirstPersonCamera.pitch = 0;
     gFirstPersonCamera.yaw = 0;
     gFirstPersonCamera.crouch = 0;
@@ -215,4 +220,33 @@ void first_person_reset(void) {
     gFirstPersonCamera.offset[0] = 0;
     gFirstPersonCamera.offset[1] = 0;
     gFirstPersonCamera.offset[2] = 0;
+}
+
+// Flip jumps (backflip / side flip / rollouts) rotate the model through baked animation, not the
+// object angle, so there's nothing simple to read. Instead we SYNTHESIZE a roll from the animation's
+// progress: 0 at the start of the flip, building to one full turn by the end. Flatscreen applies this
+// as a 2D screen roll; VR injects it into the eye view (pc_main -> vr_set_flip_roll). Off unless the
+// FP Flip Cam toggle is on.
+s16 first_person_flip_roll(struct MarioState *m) {
+    if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
+    f32 turns;
+    switch (m->action) {
+        case ACT_BACKFLIP:         turns = -1.0f; break;
+        case ACT_SIDE_FLIP:        turns =  1.0f; break;
+        case ACT_FORWARD_ROLLOUT:  turns =  1.0f; break;
+        case ACT_BACKWARD_ROLLOUT: turns = -1.0f; break;
+        default:                   return 0;
+    }
+    struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
+    if (a->curAnim == NULL || a->curAnim->loopEnd <= 1) { return 0; }
+    f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
+    if (progress < 0.0f) { progress = 0.0f; }
+    if (progress > 1.0f) { progress = 1.0f; }
+    return (s16)(progress * turns * 65536.0f);
+}
+
+// Convenience for the VR bridge (pc_main): the local player's flip roll in radians. s16 angle units
+// map 0x8000 -> pi, so radians = angle * pi / 32768. Returns 0 when not flipping or the toggle is off.
+f32 first_person_flip_roll_rad(void) {
+    return (f32)first_person_flip_roll(&gMarioStates[0]) * (3.14159265358979f / 32768.0f);
 }

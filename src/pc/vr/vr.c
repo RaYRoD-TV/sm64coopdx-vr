@@ -102,6 +102,9 @@ static float sAnticlipOffsetM[3] = { 0.0f, 0.0f, 0.0f }; // applied anchor offse
 static float sHeadCamPos[3]      = { 0.0f, 0.0f, 0.0f }; // cyclopean eye in game-camera space (game units)
 static bool  sHeadCamPosValid    = false;
 
+// First-person flip cam: roll (radians) applied to the eye view so the headset follows Mario's flips.
+static float sFlipRollRad        = 0.0f;
+
 // Sky: a world-anchored cylinder that wraps around you (falls back to a flat quad
 // if the cylinder layer isn't supported). HUD/menu panel: head-locked, near.
 static float sSkyRadius   = 8.0f;       // cylinder radius (meters) - distance to the sky surface
@@ -282,10 +285,28 @@ static void vr_build_eye_matrix(int eye) {
     fov.angleDown = -aV; fov.angleUp = aV;
     sRenderFov[eye] = fov;
 
+    // First-person flip cam: roll the view about the eye's forward axis (eye-space Z) so the headset
+    // follows Mario's flips. Build the roll once; reuse for the eye and the sky dome so they stay locked
+    // together. Only in first-person; sFlipRollRad == 0 leaves everything upright.
+    bool  doFlipRoll = (sFirstPerson && sFlipRollRad != 0.0f);
+    float flipRz[4][4] = {{0}};
+    if (doFlipRoll) {
+        float cr = cosf(sFlipRollRad), sr = sinf(sFlipRollRad);
+        flipRz[0][0] = cr; flipRz[0][1] = sr; flipRz[0][2] = 0.0f; flipRz[0][3] = 0.0f;
+        flipRz[1][0] =-sr; flipRz[1][1] = cr; flipRz[1][2] = 0.0f; flipRz[1][3] = 0.0f;
+        flipRz[2][0] = 0.0f; flipRz[2][1] = 0.0f; flipRz[2][2] = 1.0f; flipRz[2][3] = 0.0f;
+        flipRz[3][0] = 0.0f; flipRz[3][1] = 0.0f; flipRz[3][2] = 0.0f; flipRz[3][3] = 1.0f;
+    }
+
     float V[4][4], P[4][4], AV[4][4];
     mat_view_from_pose(V, pose);
     mat_proj_fov(P, fov, zn, zf);
-    mat_mul(AV, A, V);
+    if (doFlipRoll) {
+        float Vr[4][4]; mat_mul(Vr, V, flipRz); // V' = V * Rz  (roll the eye view)
+        mat_mul(AV, A, Vr);
+    } else {
+        mat_mul(AV, A, V);
+    }
     mat_mul(sEyeVP[eye], AV, P);
 
     // Eye-sphere dome view-proj: rotation-only (zero translation -> sky at infinity, no
@@ -296,7 +317,12 @@ static void vr_build_eye_matrix(int eye) {
     float Vsky[4][4], Psky[4][4];
     mat_view_from_pose(Vsky, skyPose);
     mat_proj_fov(Psky, fov, 1.0f, 5000.0f);
-    mat_mul(sSkyVP[eye], Vsky, Psky);
+    if (doFlipRoll) {
+        float Vskyr[4][4]; mat_mul(Vskyr, Vsky, flipRz); // roll the sky dome with the eye view
+        mat_mul(sSkyVP[eye], Vskyr, Psky);
+    } else {
+        mat_mul(sSkyVP[eye], Vsky, Psky);
+    }
 
     { static int d = 0; if (d < 6) { d++;
         printf("[VRskyVP] eye=%d sky.diag=%.4f,%.4f,%.4f sky.m23=%.4f | eye.diag=%.4f,%.4f,%.4f | orient=%.3f,%.3f,%.3f,%.3f\n",
@@ -655,6 +681,9 @@ void  vr_anticlip_set_offset(const float m[3]) {
     sAnticlipOffsetM[0] = m[0]; sAnticlipOffsetM[1] = m[1]; sAnticlipOffsetM[2] = m[2];
 }
 
+// First-person flip cam: how much to roll the eye view this frame (radians).
+void  vr_set_flip_roll(float radians) { sFlipRollRad = radians; }
+
 // The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
 // is tuned from the in-game Options -> VR menu.
 static void vr_poll_tuning_keys(void) {
@@ -970,6 +999,7 @@ void  vr_reset_defaults(void) {}
 bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enabled(bool e) { (void)e; }
 bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
 void  vr_anticlip_set_offset(const float m[3]) { (void)m; }
+void  vr_set_flip_roll(float radians) { (void)radians; }
 int   vr_eye_count(void)     { return 0; }
 int   vr_eye_width(int e)    { (void)e; return 0; }
 int   vr_eye_height(int e)   { (void)e; return 0; }

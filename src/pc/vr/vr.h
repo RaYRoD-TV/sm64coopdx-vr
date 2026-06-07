@@ -38,6 +38,10 @@ bool  vr_anticlip_is_enabled(void);   void vr_anticlip_set_enabled(bool e);
 bool  vr_anticlip_get_head_campos(float out[3]); // cyclopean eye in game-camera space; false = skip this frame
 void  vr_anticlip_set_offset(const float m[3]);  // smoothed anchor offset (meters)
 
+// First-person flip cam: roll the eye view by this angle (radians) so the headset follows Mario's
+// flip jumps. Set each frame from pc_main; 0 = upright. Only applied in first-person mode.
+void  vr_set_flip_roll(float radians);
+
 // Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 // per-eye views. Call once before the eye loop.
 void  vr_begin_frame(void);

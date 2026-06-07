@@ -393,18 +393,19 @@ index 0000000..d9b0d6c
 +echo === Game exited. Scroll up to review any [VR] lines. ===
 +pause
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22..07e969f 100644
+index 4bfed22..a5654c7 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
-@@ -24,6 +24,7 @@ struct FirstPersonCamera gFirstPersonCamera = {
+@@ -24,6 +24,8 @@ struct FirstPersonCamera gFirstPersonCamera = {
      .forceYaw = false,
      .forceRoll = true,
      .centerL = true,
 +    .showBody = false,
++    .flipCam = false,
      .pitch = 0,
      .yaw = 0,
      .crouch = 0,
-@@ -63,6 +64,12 @@ static void first_person_camera_update(void) {
+@@ -63,6 +65,12 @@ static void first_person_camera_update(void) {
      struct MarioState *m = &gMarioStates[0];
      f32 sensX = 0.3f * camera_config_get_x_sensitivity();
      f32 sensY = 0.4f * camera_config_get_y_sensitivity();
@@ -417,7 +418,7 @@ index 4bfed22..07e969f 100644
  
      if (mouse_relative_enabled) {
          // hack: make c buttons work for moving the camera
-@@ -77,7 +84,7 @@ static void first_person_camera_update(void) {
+@@ -77,7 +85,7 @@ static void first_person_camera_update(void) {
  
          // update pitch
          if (!gFirstPersonCamera.forcePitch) {
@@ -426,7 +427,7 @@ index 4bfed22..07e969f 100644
              gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
          }
  
-@@ -86,7 +93,7 @@ static void first_person_camera_update(void) {
+@@ -86,7 +94,7 @@ static void first_person_camera_update(void) {
              if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
                  gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
              } else {
@@ -435,7 +436,19 @@ index 4bfed22..07e969f 100644
              }
          }
      }
-@@ -174,7 +181,14 @@ void first_person_update(void) {
+@@ -143,7 +151,10 @@ static void first_person_camera_update(void) {
+     vec3f_copy(gLakituState.goalFocus, gLakituState.focus);
+ 
+     // set other values
+-    if (gFirstPersonCamera.forceRoll) {
++    s16 flipRoll = first_person_flip_roll(m);
++    if (flipRoll != 0) {
++        gLakituState.roll = flipRoll; // flatscreen: 2D screen roll (VR uses vr_set_flip_roll, set in pc_main)
++    } else if (gFirstPersonCamera.forceRoll) {
+         gLakituState.roll = 0;
+     }
+     gLakituState.posHSpeed = 0;
+@@ -174,7 +185,14 @@ void first_person_update(void) {
              level_trigger_warp(m, WARP_OP_LOOK_UP);
          }
  
@@ -451,26 +464,72 @@ index 4bfed22..07e969f 100644
          if (m->heldObj) {
              Vec3f camDir = {
                  m->area->camera->focus[0] - m->area->camera->pos[0],
-@@ -193,6 +207,7 @@ void first_person_update(void) {
+@@ -193,6 +211,8 @@ void first_person_update(void) {
  void first_person_reset(void) {
      gFirstPersonCamera.forceRoll = false;
      gFirstPersonCamera.centerL = true;
 +    gFirstPersonCamera.showBody = false;
++    gFirstPersonCamera.flipCam = false;
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
+@@ -201,3 +221,32 @@ void first_person_reset(void) {
+     gFirstPersonCamera.offset[1] = 0;
+     gFirstPersonCamera.offset[2] = 0;
+ }
++
++// Flip jumps (backflip / side flip / rollouts) rotate the model through baked animation, not the
++// object angle, so there's nothing simple to read. Instead we SYNTHESIZE a roll from the animation's
++// progress: 0 at the start of the flip, building to one full turn by the end. Flatscreen applies this
++// as a 2D screen roll; VR injects it into the eye view (pc_main -> vr_set_flip_roll). Off unless the
++// FP Flip Cam toggle is on.
++s16 first_person_flip_roll(struct MarioState *m) {
++    if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
++    f32 turns;
++    switch (m->action) {
++        case ACT_BACKFLIP:         turns = -1.0f; break;
++        case ACT_SIDE_FLIP:        turns =  1.0f; break;
++        case ACT_FORWARD_ROLLOUT:  turns =  1.0f; break;
++        case ACT_BACKWARD_ROLLOUT: turns = -1.0f; break;
++        default:                   return 0;
++    }
++    struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
++    if (a->curAnim == NULL || a->curAnim->loopEnd <= 1) { return 0; }
++    f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
++    if (progress < 0.0f) { progress = 0.0f; }
++    if (progress > 1.0f) { progress = 1.0f; }
++    return (s16)(progress * turns * 65536.0f);
++}
++
++// Convenience for the VR bridge (pc_main): the local player's flip roll in radians. s16 angle units
++// map 0x8000 -> pi, so radians = angle * pi / 32768. Returns 0 when not flipping or the toggle is off.
++f32 first_person_flip_roll_rad(void) {
++    return (f32)first_person_flip_roll(&gMarioStates[0]) * (3.14159265358979f / 32768.0f);
++}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf..7a99f64 100644
+index 42bfeaf..fd486d5 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
-@@ -14,6 +14,7 @@ struct FirstPersonCamera {
+@@ -14,6 +14,8 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
 +    bool showBody;   // first-person: render Mario's torso/arms/legs (head stays hidden so it can't block the view)
++    bool flipCam;    // first-person: roll the view with Mario's flip jumps (backflip / side flip / rollouts)
      s16 pitch;
      s16 yaw;
      f32 crouch;
+@@ -35,4 +37,9 @@ void first_person_update(void);
+ /* |description|Resets first person|descriptionEnd| */
+ void first_person_reset(void);
+ 
++/* |description|Synthetic flip-roll angle (s16) for the current action when FP Flip Cam is on, else 0|descriptionEnd| */
++s16 first_person_flip_roll(struct MarioState *m);
++/* |description|Local player's flip roll in radians for the VR eye view (0 when not flipping)|descriptionEnd| */
++f32 first_person_flip_roll_rad(void);
++
+ #endif // FIRST_PERSON_CAM_H
+\ No newline at end of file
 diff --git a/src/game/level_update.c b/src/game/level_update.c
 index 02b8216..57639a9 100644
 --- a/src/game/level_update.c
@@ -991,10 +1050,10 @@ index 6a4c2ef..b772b91 100644
          if (gNetworkType == NT_SERVER) {
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
-index 0000000..4b5636d
+index 0000000..02ea51b
 --- /dev/null
 +++ b/src/pc/djui/djui_panel_vr.c
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,122 @@
 +#include "djui.h"
 +#include "djui_panel.h"
 +#include "djui_panel_menu.h"
@@ -1012,6 +1071,7 @@ index 0000000..4b5636d
 +
 +static bool sFp;                // first person on/off
 +static bool sShowBody;          // first person: show Mario's body (torso/arms/legs)
++static bool sFlipCam;           // first person: roll the view with Mario's flip jumps
 +static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
 +static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 +static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
@@ -1022,7 +1082,7 @@ index 0000000..4b5636d
 +static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 +
 +// Widget handles, so Reset to Default can refresh what's on screen.
-+static struct DjuiCheckbox *cbFp, *cbShowBody, *cbAntiClip;
++static struct DjuiCheckbox *cbFp, *cbShowBody, *cbFlipCam, *cbAntiClip;
 +static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 +
 +static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
@@ -1035,6 +1095,7 @@ index 0000000..4b5636d
 +static void vr_panel_seed_proxies(void) {
 +    sFp         = vr_first_person_active() || get_first_person_enabled();
 +    sShowBody   = gFirstPersonCamera.showBody;
++    sFlipCam    = gFirstPersonCamera.flipCam;
 +    sAntiClip   = vr_anticlip_is_enabled();
 +    sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
 +    sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
@@ -1049,6 +1110,7 @@ index 0000000..4b5636d
 +static void vr_panel_refresh_widgets(void) {
 +    if (cbFp)       { djui_base_set_visible(&cbFp->rectValue->base,       sFp); }
 +    if (cbShowBody) { djui_base_set_visible(&cbShowBody->rectValue->base, sShowBody); }
++    if (cbFlipCam)  { djui_base_set_visible(&cbFlipCam->rectValue->base,  sFlipCam); }
 +    if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
 +    if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
 +    if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
@@ -1072,6 +1134,7 @@ index 0000000..4b5636d
 +static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 +static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
 +static void vr_panel_showbody_changed(UNUSED struct DjuiBase* caller)  { gFirstPersonCamera.showBody = sShowBody; }
++static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller)   { gFirstPersonCamera.flipCam = sFlipCam; }
 +
 +static void vr_panel_reset(UNUSED struct DjuiBase* caller) {
 +    vr_reset_defaults();
@@ -1084,7 +1147,7 @@ index 0000000..4b5636d
 +    vr_panel_seed_proxies();
 +    // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
 +    // previous open must not be reused.
-+    cbFp = cbShowBody = cbAntiClip = NULL;
++    cbFp = cbShowBody = cbFlipCam = cbAntiClip = NULL;
 +    slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 +
 +    struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
@@ -1093,6 +1156,7 @@ index 0000000..4b5636d
 +        // First person works in both flatscreen and VR, so it's always shown.
 +        cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
 +        cbShowBody = djui_checkbox_create(body, "FP Show Body", &sShowBody, vr_panel_showbody_changed);
++        cbFlipCam = djui_checkbox_create(body, "FP Flip Cam (intense)", &sFlipCam, vr_panel_flipcam_changed);
 +
 +        // The rest only matters with VR running, so hide it in plain flatscreen sessions.
 +        if (vr_is_requested()) {
@@ -1443,7 +1507,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..2f23a06 100644
+index 0d4f9f7..240bf75 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1610,7 +1674,7 @@ index 0d4f9f7..2f23a06 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +419,67 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +419,73 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1629,6 +1693,12 @@ index 0d4f9f7..2f23a06 100644
 +                static bool sVrFpPrev = false;
 +                bool vrFp = vr_first_person_active();
 +                if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
++            }
++            // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
++            // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
++            {
++                extern f32 first_person_flip_roll_rad(void); // game/first_person_cam.h
++                vr_set_flip_roll(first_person_flip_roll_rad());
 +            }
 +            if (vr_frame_is_nongameplay()) {
 +                // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
@@ -1678,7 +1748,7 @@ index 0d4f9f7..2f23a06 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +638,7 @@ void game_deinit(void) {
+@@ -452,6 +644,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1686,7 +1756,7 @@ index 0d4f9f7..2f23a06 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +691,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +697,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -1704,10 +1774,10 @@ index 0d4f9f7..2f23a06 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..0876d0e
+index 0000000..b6def3f
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,988 @@
+@@ -0,0 +1,1018 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -1811,6 +1881,9 @@ index 0000000..0876d0e
 +static float sAnticlipOffsetM[3] = { 0.0f, 0.0f, 0.0f }; // applied anchor offset (smoothed, in vr_build_eye_matrix)
 +static float sHeadCamPos[3]      = { 0.0f, 0.0f, 0.0f }; // cyclopean eye in game-camera space (game units)
 +static bool  sHeadCamPosValid    = false;
++
++// First-person flip cam: roll (radians) applied to the eye view so the headset follows Mario's flips.
++static float sFlipRollRad        = 0.0f;
 +
 +// Sky: a world-anchored cylinder that wraps around you (falls back to a flat quad
 +// if the cylinder layer isn't supported). HUD/menu panel: head-locked, near.
@@ -1992,10 +2065,28 @@ index 0000000..0876d0e
 +    fov.angleDown = -aV; fov.angleUp = aV;
 +    sRenderFov[eye] = fov;
 +
++    // First-person flip cam: roll the view about the eye's forward axis (eye-space Z) so the headset
++    // follows Mario's flips. Build the roll once; reuse for the eye and the sky dome so they stay locked
++    // together. Only in first-person; sFlipRollRad == 0 leaves everything upright.
++    bool  doFlipRoll = (sFirstPerson && sFlipRollRad != 0.0f);
++    float flipRz[4][4] = {{0}};
++    if (doFlipRoll) {
++        float cr = cosf(sFlipRollRad), sr = sinf(sFlipRollRad);
++        flipRz[0][0] = cr; flipRz[0][1] = sr; flipRz[0][2] = 0.0f; flipRz[0][3] = 0.0f;
++        flipRz[1][0] =-sr; flipRz[1][1] = cr; flipRz[1][2] = 0.0f; flipRz[1][3] = 0.0f;
++        flipRz[2][0] = 0.0f; flipRz[2][1] = 0.0f; flipRz[2][2] = 1.0f; flipRz[2][3] = 0.0f;
++        flipRz[3][0] = 0.0f; flipRz[3][1] = 0.0f; flipRz[3][2] = 0.0f; flipRz[3][3] = 1.0f;
++    }
++
 +    float V[4][4], P[4][4], AV[4][4];
 +    mat_view_from_pose(V, pose);
 +    mat_proj_fov(P, fov, zn, zf);
-+    mat_mul(AV, A, V);
++    if (doFlipRoll) {
++        float Vr[4][4]; mat_mul(Vr, V, flipRz); // V' = V * Rz  (roll the eye view)
++        mat_mul(AV, A, Vr);
++    } else {
++        mat_mul(AV, A, V);
++    }
 +    mat_mul(sEyeVP[eye], AV, P);
 +
 +    // Eye-sphere dome view-proj: rotation-only (zero translation -> sky at infinity, no
@@ -2006,7 +2097,12 @@ index 0000000..0876d0e
 +    float Vsky[4][4], Psky[4][4];
 +    mat_view_from_pose(Vsky, skyPose);
 +    mat_proj_fov(Psky, fov, 1.0f, 5000.0f);
-+    mat_mul(sSkyVP[eye], Vsky, Psky);
++    if (doFlipRoll) {
++        float Vskyr[4][4]; mat_mul(Vskyr, Vsky, flipRz); // roll the sky dome with the eye view
++        mat_mul(sSkyVP[eye], Vskyr, Psky);
++    } else {
++        mat_mul(sSkyVP[eye], Vsky, Psky);
++    }
 +
 +    { static int d = 0; if (d < 6) { d++;
 +        printf("[VRskyVP] eye=%d sky.diag=%.4f,%.4f,%.4f sky.m23=%.4f | eye.diag=%.4f,%.4f,%.4f | orient=%.3f,%.3f,%.3f,%.3f\n",
@@ -2365,6 +2461,9 @@ index 0000000..0876d0e
 +    sAnticlipOffsetM[0] = m[0]; sAnticlipOffsetM[1] = m[1]; sAnticlipOffsetM[2] = m[2];
 +}
 +
++// First-person flip cam: how much to roll the eye view this frame (radians).
++void  vr_set_flip_roll(float radians) { sFlipRollRad = radians; }
++
 +// The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
 +// is tuned from the in-game Options -> VR menu.
 +static void vr_poll_tuning_keys(void) {
@@ -2680,6 +2779,7 @@ index 0000000..0876d0e
 +bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enabled(bool e) { (void)e; }
 +bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
 +void  vr_anticlip_set_offset(const float m[3]) { (void)m; }
++void  vr_set_flip_roll(float radians) { (void)radians; }
 +int   vr_eye_count(void)     { return 0; }
 +int   vr_eye_width(int e)    { (void)e; return 0; }
 +int   vr_eye_height(int e)   { (void)e; return 0; }
@@ -2698,10 +2798,10 @@ index 0000000..0876d0e
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..e582b1e
+index 0000000..d5be302
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,82 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -2741,6 +2841,10 @@ index 0000000..e582b1e
 +bool  vr_anticlip_is_enabled(void);   void vr_anticlip_set_enabled(bool e);
 +bool  vr_anticlip_get_head_campos(float out[3]); // cyclopean eye in game-camera space; false = skip this frame
 +void  vr_anticlip_set_offset(const float m[3]);  // smoothed anchor offset (meters)
++
++// First-person flip cam: roll the eye view by this angle (radians) so the headset follows Mario's
++// flip jumps. Set each frame from pc_main; 0 = upright. Only applied in first-person mode.
++void  vr_set_flip_roll(float radians);
 +
 +// Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 +// per-eye views. Call once before the eye loop.

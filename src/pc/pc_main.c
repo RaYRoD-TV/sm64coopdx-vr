@@ -435,6 +435,12 @@ void produce_interpolation_frames_and_delay(void) {
                 bool vrFp = vr_first_person_active();
                 if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
             }
+            // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
+            // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
+            {
+                extern f32 first_person_flip_roll_rad(void); // game/first_person_cam.h
+                vr_set_flip_roll(first_person_flip_roll_rad());
+            }
             if (vr_frame_is_nongameplay()) {
                 // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
                 // no diorama, no 2D/3D split) once into the panel swapchain and submit it as the

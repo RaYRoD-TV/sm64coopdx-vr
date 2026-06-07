@@ -15,6 +15,7 @@ struct FirstPersonCamera {
     bool forceRoll;
     bool centerL;
     bool showBody;   // first-person: render Mario's torso/arms/legs (head stays hidden so it can't block the view)
+    bool flipCam;    // first-person: roll the view with Mario's flip jumps (backflip / side flip / rollouts)
     s16 pitch;
     s16 yaw;
     f32 crouch;
@@ -35,5 +36,10 @@ void set_first_person_enabled(bool enable);
 void first_person_update(void);
 /* |description|Resets first person|descriptionEnd| */
 void first_person_reset(void);
+
+/* |description|Synthetic flip-roll angle (s16) for the current action when FP Flip Cam is on, else 0|descriptionEnd| */
+s16 first_person_flip_roll(struct MarioState *m);
+/* |description|Local player's flip roll in radians for the VR eye view (0 when not flipping)|descriptionEnd| */
+f32 first_person_flip_roll_rad(void);
 
 #endif // FIRST_PERSON_CAM_H
