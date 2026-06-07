@@ -1,6 +1,6 @@
 # sm64coopdx VR
 
-Super Mario 64 in VR, built on the sm64coopdx PC port. With a headset on, the game renders in immersive Vr. You can lean around and look into the world.
+Super Mario 64 in VR, built on the sm64coopdx PC port. With a headset on, the game renders in immersive VR. You can lean around and look into the world.
 With no headset it just runs as the normal flatscreen game. Same exe, it works out which one you
 want on its own.
 
