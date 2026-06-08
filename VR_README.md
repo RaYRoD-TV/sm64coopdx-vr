@@ -4,8 +4,9 @@ Technical notes for the VR build. If you just want to play, the main README cove
 
 ## What it does
 
-VR runs through OpenXR. The scene is drawn twice per frame, once per eye, as a small 3D diorama
-floating in front of you, with real positional head tracking so you can lean in and look around it.
+VR runs through OpenXR. The scene is drawn twice per frame, once per eye, 
+with real positional head tracking so you can lean in and look around it.
+
 The sky is rebuilt as a 3D sphere drawn inside each eye, so it stays put when you turn your head
 instead of sliding around like the original 2D skybox does. Menus and the other flat screens (title,
 file select, pause, course/star select, dialogs) are shown on a panel in front of you rather than
