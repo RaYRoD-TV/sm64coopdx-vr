@@ -106,6 +106,14 @@ inline static s32 newcam_ivrt(u8 axis) {
     );
 }
 
+// True only in a live VR session that is NOT first-person (diorama / close-up). There we want the
+// snappy direct stick-to-yaw response that first-person uses, instead of bettercamera's acceleration
+// smoothing (momentum/lag tuned for flat third-person, which feels wrong in a headset). vr_is_active()
+// and vr_first_person_active() both return false in flat / non-VR builds, so flat play is untouched.
+static inline bool newcam_vr_diorama(void) {
+    return vr_is_active() && !vr_first_person_active();
+}
+
 // This is called at every level initialisation.
 static void newcam_init(struct Camera *c, u8 isSoftReset) {
     gNewCamera.tilt = 1500;
@@ -243,14 +251,26 @@ static void newcam_rotate_button(void) {
     else {
 
         // Yaw
-        if (ABS(gNewCamera.extStick[0]) > 20) {
+        if (newcam_vr_diorama()) {
+            // VR diorama/close-up: direct stick-to-yaw (mirrors the integration at the yaw -= ... line),
+            // no acceleration ramp/glide, so looking around feels as snappy as first-person.
+            gNewCamera.yawAccel = 0;
+            if (ABS(gNewCamera.extStick[0]) > 20) {
+                gNewCamera.yaw -= newcam_ivrt(0) * gNewCamera.extStick[0] * 0.125f * (gNewCamera.sensitivityX / 10.f);
+            }
+        } else if (ABS(gNewCamera.extStick[0]) > 20) {
             gNewCamera.yawAccel = newcam_adjust_value(gNewCamera.yawAccel, gNewCamera.extStick[0] * 0.125f, gNewCamera.extStick[0] * 1.25f);
         } else {
             gNewCamera.yawAccel -= (gNewCamera.yawAccel * (gNewCamera.deceleration / 100));
         }
 
         // Tilt
-        if (ABS(gNewCamera.extStick[1]) > 20) {
+        if (newcam_vr_diorama()) {
+            gNewCamera.tiltAccel = 0;
+            if (ABS(gNewCamera.extStick[1]) > 20) {
+                gNewCamera.tilt = newcam_clamp(gNewCamera.tilt + newcam_ivrt(1) * gNewCamera.extStick[1] * 0.125f * (gNewCamera.sensitivityY / 10.f), -NEWCAM_TILT_LIMIT, +NEWCAM_TILT_LIMIT);
+            }
+        } else if (ABS(gNewCamera.extStick[1]) > 20) {
             gNewCamera.tiltAccel = newcam_adjust_value(gNewCamera.tiltAccel, gNewCamera.extStick[1] * 0.125f, gNewCamera.extStick[1] * 1.25f);
         } else {
             gNewCamera.tiltAccel -= (gNewCamera.tiltAccel* (gNewCamera.deceleration / 100));

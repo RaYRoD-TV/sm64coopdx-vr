@@ -387,18 +387,13 @@ void draw_skybox_tile_grid(Gfx **dlist, s8 background, s8 player, s8 colorIndex)
 }
 
 void *create_skybox_ortho_matrix(s8 player) {
-    extern bool vr_is_active(void);
-    f32 left, right, bottom, top;
-    if (vr_is_active()) {
-        // VR: capture the ENTIRE panorama (fed to the world-locked cylinder layer).
-        left = 0.0f; right = (f32) SKYBOX_WIDTH;
-        bottom = 0.0f; top = (f32) SKYBOX_HEIGHT;
-    } else {
-        left = sSkyBoxInfo[player].scaledX;
-        right = sSkyBoxInfo[player].scaledX + SCREEN_WIDTH;
-        bottom = sSkyBoxInfo[player].scaledY - SCREEN_HEIGHT;
-        top = sSkyBoxInfo[player].scaledY;
-    }
+    // Always the flatscreen window (vanilla). In VR the eye renders the 3D sky sphere (gVrSkyDomeGfx),
+    // so this 2D DL is only ever drawn by the desktop mirror - which must show the normal full-screen
+    // window, not the 360 panorama. (The old VR-panorama branch was for a retired cylinder layer.)
+    f32 left = sSkyBoxInfo[player].scaledX;
+    f32 right = sSkyBoxInfo[player].scaledX + SCREEN_WIDTH;
+    f32 bottom = sSkyBoxInfo[player].scaledY - SCREEN_HEIGHT;
+    f32 top = sSkyBoxInfo[player].scaledY;
 
     extern Mtx* gBackgroundSkyboxMtx;
     Mtx *mtx;
@@ -420,56 +415,17 @@ void *create_skybox_ortho_matrix(s8 player) {
 /**
  * Creates the skybox's display list, then draws the 3x3 grid of tiles.
  */
-// VR: draw the ENTIRE skybox panorama (8 cols x 8 rows) so the world-locked cylinder
-// layer has a full 360 image instead of just the forward window. Allocates verts fresh
-// (the interpolation buffers are sized for the small window).
-void draw_skybox_panorama_vr(Gfx **dlist, s8 background, s8 player, s8 colorIndex) {
-    (void) player;
-    for (s32 r = 0; r < 8; r++) {
-        for (s32 c = 0; c < 8; c++) {
-            s32 tileIndex = r * SKYBOX_COLS + c;
-            if (tileIndex < 0)  { tileIndex = 0;  }
-            if (tileIndex > 79) { tileIndex = 79; }
-            const Texture *texture = (background < 0 || background >= 10)
-                ? gCustomSkyboxPtrList[tileIndex]
-                : (*(SkyboxTexture *) segmented_to_virtual(sSkyboxTextures[background]))[tileIndex];
-
-            f32 cr = gSkyboxColor[0] / 255.0f;
-            f32 cg = gSkyboxColor[1] / 255.0f;
-            f32 cb = gSkyboxColor[2] / 255.0f;
-            u8 *color = sSkyboxColors[colorIndex];
-            gDPSetEnvColor((*dlist)++, color[0] * cr, color[1] * cg, color[2] * cb, 255);
-
-            Vtx *verts = alloc_display_list(4 * sizeof(*verts));
-            if (verts == NULL) { continue; }
-            f32 x = c * SKYBOX_TILE_WIDTH;
-            f32 y = SKYBOX_HEIGHT - r * SKYBOX_TILE_HEIGHT;
-            make_vertex(verts, 0, x, y, -1, 0, 0, 255, 255, 255, 255);
-            make_vertex(verts, 1, x, y - SKYBOX_TILE_HEIGHT, -1, 0, 31 << 5, 255, 255, 255, 255);
-            make_vertex(verts, 2, x + SKYBOX_TILE_WIDTH, y - SKYBOX_TILE_HEIGHT, -1, 31 << 5, 31 << 5, 255, 255, 255, 255);
-            make_vertex(verts, 3, x + SKYBOX_TILE_WIDTH, y, -1, 31 << 5, 0, 255, 255, 255, 255);
-
-            gLoadBlockTexture((*dlist)++, 32, 32, G_IM_FMT_RGBA, texture);
-            gSPVertex((*dlist)++, VIRTUAL_TO_PHYSICAL(verts), 4, 0);
-            gSPDisplayList((*dlist)++, dl_draw_quad_verts_0123);
-        }
-    }
-}
-
 Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
     extern Gfx* gBackgroundSkyboxGfx;
-    extern bool vr_is_active(void);
-    bool vrFull = vr_is_active();
 
-    s32 tileCount = vrFull ? (8 * 8) : (sSkyboxTileNumY * sSkyboxTileNumX);
-    s32 dlCommandCount = 5 + tileCount * 8; // 5 for the start and end, plus the skybox tiles
+    s32 dlCommandCount = 5 + (sSkyboxTileNumY * sSkyboxTileNumX) * 8; // 5 for the start and end, plus the skybox tiles
 
     void *skybox;
-    if (gRenderingInterpolated && !vrFull) {
+    if (gRenderingInterpolated) {
         skybox = gBackgroundSkyboxGfx;
     } else {
         skybox = alloc_display_list(dlCommandCount * sizeof(Gfx));
-        if (!vrFull) { gBackgroundSkyboxGfx = (Gfx*)skybox; }
+        gBackgroundSkyboxGfx = (Gfx*)skybox;
     }
 
     Gfx *dlist = skybox;
@@ -480,10 +436,13 @@ Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
         Mtx *ortho = create_skybox_ortho_matrix(player);
 
         gSPDisplayList(dlist++, dl_skybox_begin);
+        // MUL (vanilla): compose the skybox ortho with the game's resident 3D perspective so the tile
+        // window stays anchored to camera yaw/pitch (no swim) and covers the full screen (no black gaps).
+        // In a VR session the desktop mirror restores the flatscreen perspective first (gfx_run) so this
+        // composes correctly there too.
         gSPMatrix(dlist++, VIRTUAL_TO_PHYSICAL(ortho), G_MTX_PROJECTION | G_MTX_MUL | G_MTX_NOPUSH);
         gSPDisplayList(dlist++, dl_skybox_tile_tex_settings);
-        if (vrFull) { draw_skybox_panorama_vr(&dlist, background, player, colorIndex); }
-        else        { draw_skybox_tile_grid(&dlist, background, player, colorIndex); }
+        draw_skybox_tile_grid(&dlist, background, player, colorIndex);
         gSPDisplayList(dlist++, dl_skybox_end);
         gSPEndDisplayList(dlist);
     }

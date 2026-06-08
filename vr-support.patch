@@ -403,6 +403,54 @@ index 0000000..d9b0d6c
 +echo.
 +echo === Game exited. Scroll up to review any [VR] lines. ===
 +pause
+diff --git a/src/game/bettercamera.inc.h b/src/game/bettercamera.inc.h
+index 76651f1..c685d4c 100644
+--- a/src/game/bettercamera.inc.h
++++ b/src/game/bettercamera.inc.h
+@@ -106,6 +106,14 @@ inline static s32 newcam_ivrt(u8 axis) {
+     );
+ }
+ 
++// True only in a live VR session that is NOT first-person (diorama / close-up). There we want the
++// snappy direct stick-to-yaw response that first-person uses, instead of bettercamera's acceleration
++// smoothing (momentum/lag tuned for flat third-person, which feels wrong in a headset). vr_is_active()
++// and vr_first_person_active() both return false in flat / non-VR builds, so flat play is untouched.
++static inline bool newcam_vr_diorama(void) {
++    return vr_is_active() && !vr_first_person_active();
++}
++
+ // This is called at every level initialisation.
+ static void newcam_init(struct Camera *c, u8 isSoftReset) {
+     gNewCamera.tilt = 1500;
+@@ -243,14 +251,26 @@ static void newcam_rotate_button(void) {
+     else {
+ 
+         // Yaw
+-        if (ABS(gNewCamera.extStick[0]) > 20) {
++        if (newcam_vr_diorama()) {
++            // VR diorama/close-up: direct stick-to-yaw (mirrors the integration at the yaw -= ... line),
++            // no acceleration ramp/glide, so looking around feels as snappy as first-person.
++            gNewCamera.yawAccel = 0;
++            if (ABS(gNewCamera.extStick[0]) > 20) {
++                gNewCamera.yaw -= newcam_ivrt(0) * gNewCamera.extStick[0] * 0.125f * (gNewCamera.sensitivityX / 10.f);
++            }
++        } else if (ABS(gNewCamera.extStick[0]) > 20) {
+             gNewCamera.yawAccel = newcam_adjust_value(gNewCamera.yawAccel, gNewCamera.extStick[0] * 0.125f, gNewCamera.extStick[0] * 1.25f);
+         } else {
+             gNewCamera.yawAccel -= (gNewCamera.yawAccel * (gNewCamera.deceleration / 100));
+         }
+ 
+         // Tilt
+-        if (ABS(gNewCamera.extStick[1]) > 20) {
++        if (newcam_vr_diorama()) {
++            gNewCamera.tiltAccel = 0;
++            if (ABS(gNewCamera.extStick[1]) > 20) {
++                gNewCamera.tilt = newcam_clamp(gNewCamera.tilt + newcam_ivrt(1) * gNewCamera.extStick[1] * 0.125f * (gNewCamera.sensitivityY / 10.f), -NEWCAM_TILT_LIMIT, +NEWCAM_TILT_LIMIT);
++            }
++        } else if (ABS(gNewCamera.extStick[1]) > 20) {
+             gNewCamera.tiltAccel = newcam_adjust_value(gNewCamera.tiltAccel, gNewCamera.extStick[1] * 0.125f, gNewCamera.extStick[1] * 1.25f);
+         } else {
+             gNewCamera.tiltAccel -= (gNewCamera.tiltAccel* (gNewCamera.deceleration / 100));
 diff --git a/src/game/camera.c b/src/game/camera.c
 index 5406e94..f7fa93d 100644
 --- a/src/game/camera.c
@@ -432,7 +480,7 @@ index 5406e94..f7fa93d 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22..2f66474 100644
+index 4bfed22..e458be0 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
 @@ -9,6 +9,7 @@
@@ -447,9 +495,9 @@ index 4bfed22..2f66474 100644
      .forceYaw = false,
      .forceRoll = true,
      .centerL = true,
-+    .showBody = false,
 +    .flipCam = false,
 +    .interactCam = true,
++    .easeBack = 0.0f,
      .pitch = 0,
      .yaw = 0,
      .crouch = 0,
@@ -504,17 +552,17 @@ index 4bfed22..2f66474 100644
 +    // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
 +    // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
 +    // yourself act. Ease out is slower than ease in so rapid punches don't snap the camera around.
-+    static f32 sPullback = 0.0f;
 +    bool wantPull = gFirstPersonCamera.interactCam
 +                 && (get_dialog_id() != DIALOG_NONE || (m->action & ACT_FLAG_ATTACKING) != 0);
 +    f32 pTarget = wantPull ? 1.0f : 0.0f;
-+    sPullback += (pTarget - sPullback) * ((pTarget > sPullback) ? 0.12f : 0.06f);
++    gFirstPersonCamera.easeBack += (pTarget - gFirstPersonCamera.easeBack)
++                                 * ((pTarget > gFirstPersonCamera.easeBack) ? 0.12f : 0.06f);
 +
-+    if (sPullback > 0.001f) {
++    if (gFirstPersonCamera.easeBack > 0.001f) {
 +        Vec3f look = { fpFocus[0] - fpPos[0], fpFocus[1] - fpPos[1], fpFocus[2] - fpPos[2] };
 +        vec3f_normalize(look);
-+        f32 t = sPullback;
-+        f32 dist = 420.0f * t, up = 170.0f * t;
++        f32 t = gFirstPersonCamera.easeBack;
++        f32 dist = 540.0f * t, up = 210.0f * t; // pull back far enough to frame Mario fully
 +        Vec3f marioHead = {
 +            m->pos[0] + gFirstPersonCamera.offset[0],
 +            m->pos[1] + gFirstPersonCamera.offset[1] + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch),
@@ -551,33 +599,34 @@ index 4bfed22..2f66474 100644
          gLakituState.roll = 0;
      }
      gLakituState.posHSpeed = 0;
-@@ -174,7 +216,14 @@ void first_person_update(void) {
+@@ -174,7 +216,15 @@ void first_person_update(void) {
              level_trigger_warp(m, WARP_OP_LOOK_UP);
          }
  
 -        m->marioBodyState->modelState = 0x100;
-+        if (gFirstPersonCamera.showBody) {
-+            // Show the body: clear only the alpha-hide bit so torso/arms/legs render. The head
-+            // subtree is hidden separately in geo_mario_head_rotation so it can't fill the view.
-+            // Clearing only 0x100 keeps the cap-effect high byte (wing/vanish/metal) intact.
-+            m->marioBodyState->modelState &= ~0x100;
++        // First-person: Mario is invisible, and snaps to SOLID (opaque, never half-transparent) only
++        // once the camera has pulled CLEAR of his body. Below the threshold the camera is close to /
++        // inside Mario, so he's hidden - otherwise easing back in would show the camera passing through
++        // his solid body. Clearing only 0x100 keeps him opaque and preserves the cap-effect high byte.
++        if (gFirstPersonCamera.easeBack > 0.30f) {
++            m->marioBodyState->modelState &= ~0x100; // solid / opaque (camera is pulled clear of the body)
 +        } else {
-+            m->marioBodyState->modelState = 0x100; // fully invisible (the original first-person look)
++            m->marioBodyState->modelState = 0x100;   // fully invisible (near the head; no body interior shown)
 +        }
          if (m->heldObj) {
              Vec3f camDir = {
                  m->area->camera->focus[0] - m->area->camera->pos[0],
-@@ -193,6 +242,9 @@ void first_person_update(void) {
+@@ -193,6 +243,9 @@ void first_person_update(void) {
  void first_person_reset(void) {
      gFirstPersonCamera.forceRoll = false;
      gFirstPersonCamera.centerL = true;
-+    gFirstPersonCamera.showBody = false;
 +    gFirstPersonCamera.flipCam = false;
 +    gFirstPersonCamera.interactCam = true;
++    gFirstPersonCamera.easeBack = 0.0f;
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +253,32 @@ void first_person_reset(void) {
+@@ -201,3 +254,40 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -589,20 +638,28 @@ index 4bfed22..2f66474 100644
 +// FP Flip Cam toggle is on.
 +s16 first_person_flip_roll(struct MarioState *m) {
 +    if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
-+    f32 turns;
++    // Drives a PITCH flip in VR (nose over tail), not a barrel roll. Sign tuned on the headset: forward
++    // somersaults pitch the view FORWARD (+1), back somersaults pitch BACK (-1). Triple jump + star/wing
++    // triple jumps + side ("slide") flip + forward rollout are forward; backflip + backward rollout back.
++    f32 dir;
 +    switch (m->action) {
-+        case ACT_BACKFLIP:         turns = -1.0f; break;
-+        case ACT_SIDE_FLIP:        turns =  1.0f; break;
-+        case ACT_FORWARD_ROLLOUT:  turns =  1.0f; break;
-+        case ACT_BACKWARD_ROLLOUT: turns = -1.0f; break;
-+        default:                   return 0;
++        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip
++        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward (star/cap triple jump)
++        case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward (wing cap triple jump)
++        case ACT_SIDE_FLIP:           dir =  1.0f; break; // "slide flip" -> forward
++        case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll
++        case ACT_BACKFLIP:            dir = -1.0f; break; // back flip
++        case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll
++        default:                      return 0;
 +    }
 +    struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
 +    if (a->curAnim == NULL || a->curAnim->loopEnd <= 1) { return 0; }
 +    f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
 +    if (progress < 0.0f) { progress = 0.0f; }
 +    if (progress > 1.0f) { progress = 1.0f; }
-+    return (s16)(progress * turns * 65536.0f);
++    // Smoothstep (3t^2 - 2t^3) so the flip eases in and out instead of the old linear snap.
++    f32 eased = progress * progress * (3.0f - 2.0f * progress);
++    return (s16)(eased * dir * 65536.0f);
 +}
 +
 +// Convenience for the VR bridge (pc_main): the local player's flip roll in radians. s16 angle units
@@ -611,16 +668,16 @@ index 4bfed22..2f66474 100644
 +    return (f32)first_person_flip_roll(&gMarioStates[0]) * (3.14159265358979f / 32768.0f);
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf..7658d63 100644
+index 42bfeaf..0cdbd9a 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
 @@ -14,6 +14,9 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
-+    bool showBody;   // first-person: render Mario's torso/arms/legs (head stays hidden so it can't block the view)
 +    bool flipCam;    // first-person: roll the view with Mario's flip jumps (backflip / side flip / rollouts)
 +    bool interactCam;// first-person: ease the camera back to show Mario when interacting/attacking, then ease in
++    f32 easeBack;    // 0..1 eased pullback amount (drives the camera pull AND Mario's fade-in visibility)
      s16 pitch;
      s16 yaw;
      f32 crouch;
@@ -678,34 +735,6 @@ index 704924a..c665398 100644
  extern struct MarioState gMarioStates[];
  extern struct MarioState *gMarioState;
  
-diff --git a/src/game/mario_misc.c b/src/game/mario_misc.c
-index 18d4275..f3ad9d3 100644
---- a/src/game/mario_misc.c
-+++ b/src/game/mario_misc.c
-@@ -6,6 +6,7 @@
- #include "behavior_actions.h"
- #include "behavior_data.h"
- #include "camera.h"
-+#include "first_person_cam.h"
- #include "dialog_ids.h"
- #include "engine/behavior_script.h"
- #include "engine/graph_node.h"
-@@ -518,6 +519,15 @@ Gfx* geo_mario_head_rotation(s32 callContext, struct GraphNode* node, Mat4* c) {
-         struct GraphNodeRotation* rotNode = (struct GraphNodeRotation*) node->next;
-         struct Camera* camera = gCurGraphNodeCamera->config.camera;
- 
-+        // First-person "show body": hide the LOCAL player's head subtree (eyes/face/cap/wings) so the
-+        // torso/arms/legs are visible without the inside of Mario's head filling the view. Local player
-+        // only, so co-op partners are unaffected.
-+        if (plrIdx == 0 && gFirstPersonCamera.enabled && gFirstPersonCamera.showBody) {
-+            node->flags &= ~GRAPH_RENDER_ACTIVE;
-+            return NULL;
-+        }
-+        node->flags |= GRAPH_RENDER_ACTIVE; // re-enable when not hiding (it may have been cleared last frame)
-+
-         if (!marioActive) {
-             node->flags &= ~GRAPH_RENDER_ACTIVE;
-         } else if (((plrIdx == 0) && (camera->mode == CAMERA_MODE_C_UP)) || ((plrIdx != 0) && (action == ACT_FIRST_PERSON))) {
 diff --git a/src/game/rendering_graph_node.c b/src/game/rendering_graph_node.c
 index 82d0da8..0f78c04 100644
 --- a/src/game/rendering_graph_node.c
@@ -732,7 +761,7 @@ index 82d0da8..0f78c04 100644
      // the horizontal effective fov is actually 60 degrees, so you can see objects
      // visibly pop in or out at the edge of the screen.
 diff --git a/src/game/skybox.c b/src/game/skybox.c
-index d3c1560..01552b1 100644
+index d3c1560..8982032 100644
 --- a/src/game/skybox.c
 +++ b/src/game/skybox.c
 @@ -136,6 +136,135 @@ static const u16 sSkyboxTileNumY = 3; // Shouldn't need to change this
@@ -871,100 +900,37 @@ index d3c1560..01552b1 100644
  /**
   * Convert the camera's yaw into an x position into the scaled skybox image.
   *
-@@ -258,10 +387,18 @@ void draw_skybox_tile_grid(Gfx **dlist, s8 background, s8 player, s8 colorIndex)
+@@ -258,6 +387,9 @@ void draw_skybox_tile_grid(Gfx **dlist, s8 background, s8 player, s8 colorIndex)
  }
  
  void *create_skybox_ortho_matrix(s8 player) {
--    f32 left = sSkyBoxInfo[player].scaledX;
--    f32 right = sSkyBoxInfo[player].scaledX + SCREEN_WIDTH;
--    f32 bottom = sSkyBoxInfo[player].scaledY - SCREEN_HEIGHT;
--    f32 top = sSkyBoxInfo[player].scaledY;
-+    extern bool vr_is_active(void);
-+    f32 left, right, bottom, top;
-+    if (vr_is_active()) {
-+        // VR: capture the ENTIRE panorama (fed to the world-locked cylinder layer).
-+        left = 0.0f; right = (f32) SKYBOX_WIDTH;
-+        bottom = 0.0f; top = (f32) SKYBOX_HEIGHT;
-+    } else {
-+        left = sSkyBoxInfo[player].scaledX;
-+        right = sSkyBoxInfo[player].scaledX + SCREEN_WIDTH;
-+        bottom = sSkyBoxInfo[player].scaledY - SCREEN_HEIGHT;
-+        top = sSkyBoxInfo[player].scaledY;
-+    }
- 
-     extern Mtx* gBackgroundSkyboxMtx;
-     Mtx *mtx;
-@@ -283,17 +420,56 @@ void *create_skybox_ortho_matrix(s8 player) {
- /**
-  * Creates the skybox's display list, then draws the 3x3 grid of tiles.
-  */
-+// VR: draw the ENTIRE skybox panorama (8 cols x 8 rows) so the world-locked cylinder
-+// layer has a full 360 image instead of just the forward window. Allocates verts fresh
-+// (the interpolation buffers are sized for the small window).
-+void draw_skybox_panorama_vr(Gfx **dlist, s8 background, s8 player, s8 colorIndex) {
-+    (void) player;
-+    for (s32 r = 0; r < 8; r++) {
-+        for (s32 c = 0; c < 8; c++) {
-+            s32 tileIndex = r * SKYBOX_COLS + c;
-+            if (tileIndex < 0)  { tileIndex = 0;  }
-+            if (tileIndex > 79) { tileIndex = 79; }
-+            const Texture *texture = (background < 0 || background >= 10)
-+                ? gCustomSkyboxPtrList[tileIndex]
-+                : (*(SkyboxTexture *) segmented_to_virtual(sSkyboxTextures[background]))[tileIndex];
-+
-+            f32 cr = gSkyboxColor[0] / 255.0f;
-+            f32 cg = gSkyboxColor[1] / 255.0f;
-+            f32 cb = gSkyboxColor[2] / 255.0f;
-+            u8 *color = sSkyboxColors[colorIndex];
-+            gDPSetEnvColor((*dlist)++, color[0] * cr, color[1] * cg, color[2] * cb, 255);
-+
-+            Vtx *verts = alloc_display_list(4 * sizeof(*verts));
-+            if (verts == NULL) { continue; }
-+            f32 x = c * SKYBOX_TILE_WIDTH;
-+            f32 y = SKYBOX_HEIGHT - r * SKYBOX_TILE_HEIGHT;
-+            make_vertex(verts, 0, x, y, -1, 0, 0, 255, 255, 255, 255);
-+            make_vertex(verts, 1, x, y - SKYBOX_TILE_HEIGHT, -1, 0, 31 << 5, 255, 255, 255, 255);
-+            make_vertex(verts, 2, x + SKYBOX_TILE_WIDTH, y - SKYBOX_TILE_HEIGHT, -1, 31 << 5, 31 << 5, 255, 255, 255, 255);
-+            make_vertex(verts, 3, x + SKYBOX_TILE_WIDTH, y, -1, 31 << 5, 0, 255, 255, 255, 255);
-+
-+            gLoadBlockTexture((*dlist)++, 32, 32, G_IM_FMT_RGBA, texture);
-+            gSPVertex((*dlist)++, VIRTUAL_TO_PHYSICAL(verts), 4, 0);
-+            gSPDisplayList((*dlist)++, dl_draw_quad_verts_0123);
-+        }
-+    }
-+}
-+
++    // Always the flatscreen window (vanilla). In VR the eye renders the 3D sky sphere (gVrSkyDomeGfx),
++    // so this 2D DL is only ever drawn by the desktop mirror - which must show the normal full-screen
++    // window, not the 360 panorama. (The old VR-panorama branch was for a retired cylinder layer.)
+     f32 left = sSkyBoxInfo[player].scaledX;
+     f32 right = sSkyBoxInfo[player].scaledX + SCREEN_WIDTH;
+     f32 bottom = sSkyBoxInfo[player].scaledY - SCREEN_HEIGHT;
+@@ -286,7 +418,7 @@ void *create_skybox_ortho_matrix(s8 player) {
  Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
      extern Gfx* gBackgroundSkyboxGfx;
-+    extern bool vr_is_active(void);
-+    bool vrFull = vr_is_active();
  
 -    s32 dlCommandCount = 5 + (sSkyboxTileNumY * sSkyboxTileNumX) * 8; // 5 for the start and end, plus the amount of skybox tiles
-+    s32 tileCount = vrFull ? (8 * 8) : (sSkyboxTileNumY * sSkyboxTileNumX);
-+    s32 dlCommandCount = 5 + tileCount * 8; // 5 for the start and end, plus the skybox tiles
++    s32 dlCommandCount = 5 + (sSkyboxTileNumY * sSkyboxTileNumX) * 8; // 5 for the start and end, plus the skybox tiles
  
      void *skybox;
--    if (gRenderingInterpolated) {
-+    if (gRenderingInterpolated && !vrFull) {
-         skybox = gBackgroundSkyboxGfx;
-     } else {
-         skybox = alloc_display_list(dlCommandCount * sizeof(Gfx));
--        gBackgroundSkyboxGfx = (Gfx*)skybox;
-+        if (!vrFull) { gBackgroundSkyboxGfx = (Gfx*)skybox; }
-     }
+     if (gRenderingInterpolated) {
+@@ -304,6 +436,10 @@ Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
+         Mtx *ortho = create_skybox_ortho_matrix(player);
  
-     Gfx *dlist = skybox;
-@@ -306,7 +482,8 @@ Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
          gSPDisplayList(dlist++, dl_skybox_begin);
++        // MUL (vanilla): compose the skybox ortho with the game's resident 3D perspective so the tile
++        // window stays anchored to camera yaw/pitch (no swim) and covers the full screen (no black gaps).
++        // In a VR session the desktop mirror restores the flatscreen perspective first (gfx_run) so this
++        // composes correctly there too.
          gSPMatrix(dlist++, VIRTUAL_TO_PHYSICAL(ortho), G_MTX_PROJECTION | G_MTX_MUL | G_MTX_NOPUSH);
          gSPDisplayList(dlist++, dl_skybox_tile_tex_settings);
--        draw_skybox_tile_grid(&dlist, background, player, colorIndex);
-+        if (vrFull) { draw_skybox_panorama_vr(&dlist, background, player, colorIndex); }
-+        else        { draw_skybox_tile_grid(&dlist, background, player, colorIndex); }
-         gSPDisplayList(dlist++, dl_skybox_end);
-         gSPEndDisplayList(dlist);
-     }
-@@ -370,8 +547,15 @@ Gfx *create_skybox_facing_camera(s8 player, s8 background, f32 fov,
+         draw_skybox_tile_grid(&dlist, background, player, colorIndex);
+@@ -370,8 +506,15 @@ Gfx *create_skybox_facing_camera(s8 player, s8 background, f32 fov,
      if (sSkyBoxInfo[player].yaw < 0) { sSkyBoxInfo[player].yaw += M_PI * 2.0; }
      sSkyBoxInfo[player].pitch = (M_PI / 2.0) - atan2(sqrtf(cameraFaceX * cameraFaceX + cameraFaceZ * cameraFaceZ), cameraFaceY);
  
@@ -1090,6 +1056,27 @@ index 44a7a4c..97a1ce4 100644
                  mouse_window_x = -1000;
                  mouse_window_y = -1000;
              }
+diff --git a/src/pc/controller/controller_sdl.c b/src/pc/controller/controller_sdl.c
+index 29f48ea..70c9b11 100644
+--- a/src/pc/controller/controller_sdl.c
++++ b/src/pc/controller/controller_sdl.c
+@@ -17,6 +17,7 @@
+ #include "pc/pc_main.h"
+ #include "pc/configfile.h"
+ #include "pc/platform.h"
++#include "pc/vr/vr.h"
+ #include "pc/fs/fs.h"
+ 
+ #include "game/level_update.h"
+@@ -208,7 +209,7 @@ extern s16 gMenuMode;
+ static void controller_sdl_read(OSContPad *pad) {
+     if (!init_ok) { return; }
+ 
+-    if ((gNewCamera.isMouse || get_first_person_enabled() || gDjuiHudLockMouse) && !is_game_paused() && !gDjuiPanelPauseCreated && !gDjuiInMainMenu && !gDjuiChatBoxFocus && !gDjuiConsoleFocus && gWindowApi->has_focus()) {
++    if ((gNewCamera.isMouse || get_first_person_enabled() || gDjuiHudLockMouse) && !is_game_paused() && !gDjuiPanelPauseCreated && !gDjuiInMainMenu && !gDjuiChatBoxFocus && !gDjuiConsoleFocus && (vr_is_active() || gWindowApi->has_focus())) {
+         controller_mouse_enter_relative();
+     } else {
+         controller_mouse_leave_relative();
 diff --git a/src/pc/djui/djui_cursor.c b/src/pc/djui/djui_cursor.c
 index f2c15c8..c44d8e5 100644
 --- a/src/pc/djui/djui_cursor.c
@@ -1137,7 +1124,7 @@ index 9eecd23..09baf14 100644
      } else if (abs(pad->stick_x) > abs(pad->stick_y)) {
          padHoldDirection = (pad->stick_x < 0) ? PAD_HOLD_DIR_LEFT : PAD_HOLD_DIR_RIGHT;
 diff --git a/src/pc/djui/djui_panel.c b/src/pc/djui/djui_panel.c
-index b25a251..c505d39 100644
+index b25a251..f67b93d 100644
 --- a/src/pc/djui/djui_panel.c
 +++ b/src/pc/djui/djui_panel.c
 @@ -19,6 +19,13 @@ bool djui_panel_is_active(void) {
@@ -1154,6 +1141,27 @@ index b25a251..c505d39 100644
  static struct DjuiBase* djui_panel_find_first_interactable(struct DjuiBaseChild* child) {
      while (child) {
          if (child->base->interactable && child->base->interactable->enabled) {
+@@ -85,6 +92,9 @@ struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel*
+     sMoveAmount = 0;
+ 
+     if (firstPanel) {
++        // A menu just opened: route the controller to the menu pad. Tied to panel-list lifecycle here
++        // (not per-creator) so it can't drift off as you navigate sub-panels.
++        gInteractableOverridePad = true;
+         djui_base_set_location(panelBase, 0, 0);
+         djui_cursor_input_controlled_center(panel->defaultElementBase);
+         djui_base_set_enabled(panel->base, true);
+@@ -138,6 +148,10 @@ void djui_panel_back(void) {
+ 
+ void djui_panel_update(void) {
+     if (sPanelList == NULL) { return; }
++    // Self-heal: a menu is active, so controller input must route to the menu pad. If anything cleared
++    // the flag mid-session (a panel close, a mod, etc.) this puts it back within one frame, so the
++    // gamepad can never get stuck dead in a menu.
++    if (!gInteractableOverridePad) { gInteractableOverridePad = true; }
+     if (sPanelList->base == NULL) { return; }
+     if (sPanelList->base->elem.height == 0) { return; }
+ 
 diff --git a/src/pc/djui/djui_panel.h b/src/pc/djui/djui_panel.h
 index dd752c9..cbb3920 100644
 --- a/src/pc/djui/djui_panel.h
@@ -1252,18 +1260,22 @@ index 6a4c2ef..b772b91 100644
          if (gNetworkType == NT_SERVER) {
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
-index 0000000..6553dce
+index 0000000..d8f9002
 --- /dev/null
 +++ b/src/pc/djui/djui_panel_vr.c
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,152 @@
 +#include "djui.h"
 +#include "djui_panel.h"
 +#include "djui_panel_menu.h"
 +#include "djui_panel_vr.h"
 +#include "djui_slider.h"
 +#include "djui_checkbox.h"
++#include "djui_selectionbox.h"
 +#include "pc/vr/vr.h"
 +#include "game/first_person_cam.h"
++
++// VR mode dropdown choices (order matches the vr.c preset table: 0=Tabletop, 1=Close-up, 2=First-person).
++static char* sVrModeChoices[] = { "Tabletop", "Close-up", "First-person" };
 +
 +// In-game VR settings. DJUI sliders are integer-valued, so each one uses a small proxy that scales
 +// to/from the VR module's float tunables. Values apply live as you drag, and you can see the current
@@ -1271,8 +1283,8 @@ index 0000000..6553dce
 +// the on-screen widgets (DJUI only redraws a slider/checkbox when its value is changed through the
 +// widget, so after a reset we have to nudge each one to redraw - otherwise the handles look stuck).
 +
-+static bool sFp;                // first person on/off
-+static bool sShowBody;          // first person: show Mario's body (torso/arms/legs)
++static bool sFp;                // first person on/off (flatscreen toggle)
++static unsigned int sVrMode;    // VR mode index: 0=Tabletop, 1=Close-up, 2=First-person
 +static bool sFlipCam;           // first person: roll the view with Mario's flip jumps
 +static bool sInteractCam;       // first person: ease back to show Mario when interacting/attacking
 +static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
@@ -1285,7 +1297,8 @@ index 0000000..6553dce
 +static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 +
 +// Widget handles, so Reset to Default can refresh what's on screen.
-+static struct DjuiCheckbox *cbFp, *cbShowBody, *cbFlipCam, *cbInteractCam, *cbAntiClip;
++static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip;
++static struct DjuiSelectionbox *sbMode;
 +static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 +
 +static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
@@ -1297,7 +1310,7 @@ index 0000000..6553dce
 +// Pull the live VR values into the slider proxies so the widgets show the real state.
 +static void vr_panel_seed_proxies(void) {
 +    sFp         = vr_first_person_active() || get_first_person_enabled();
-+    sShowBody   = gFirstPersonCamera.showBody;
++    sVrMode     = (unsigned int)vr_get_preset_index();
 +    sFlipCam    = gFirstPersonCamera.flipCam;
 +    sInteractCam = gFirstPersonCamera.interactCam;
 +    sAntiClip   = vr_anticlip_is_enabled();
@@ -1313,7 +1326,7 @@ index 0000000..6553dce
 +// Redraw every widget from its (just re-seeded) proxy value.
 +static void vr_panel_refresh_widgets(void) {
 +    if (cbFp)       { djui_base_set_visible(&cbFp->rectValue->base,       sFp); }
-+    if (cbShowBody) { djui_base_set_visible(&cbShowBody->rectValue->base, sShowBody); }
++    if (sbMode)     { djui_selectionbox_update_value(&sbMode->base); }
 +    if (cbFlipCam)  { djui_base_set_visible(&cbFlipCam->rectValue->base,  sFlipCam); }
 +    if (cbInteractCam) { djui_base_set_visible(&cbInteractCam->rectValue->base, sInteractCam); }
 +    if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
@@ -1330,6 +1343,10 @@ index 0000000..6553dce
 +    set_first_person_enabled(sFp);                    // game first-person camera (flatscreen + VR base view)
 +    if (vr_is_active()) { vr_set_first_person(sFp); } // VR: render life-size at Mario's head
 +}
++static void vr_panel_mode_changed(UNUSED struct DjuiBase* caller) {
++    // 0=Tabletop, 1=Close-up, 2=First-person. First-person also drives the game camera (synced by pc_main).
++    vr_set_preset_index((int)sVrMode);
++}
 +static void vr_panel_menu_dist_changed(UNUSED struct DjuiBase* caller) { vr_set_menu_dist((float)sMenuDistI / 10.0f); }
 +static void vr_panel_menu_size_changed(UNUSED struct DjuiBase* caller) { vr_set_menu_size((float)sMenuSizeI / 10.0f); }
 +static void vr_panel_dio_dist_changed(UNUSED struct DjuiBase* caller)  { vr_set_diorama_dist((float)sDioDistI / 100.0f - 2.0f); }
@@ -1338,15 +1355,16 @@ index 0000000..6553dce
 +static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 +static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 +static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
-+static void vr_panel_showbody_changed(UNUSED struct DjuiBase* caller)  { gFirstPersonCamera.showBody = sShowBody; }
 +static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; }
 +static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
 +    gFirstPersonCamera.flipCam = sFlipCam;
 +    // Flip Cam only does anything in the VR first-person view (the roll in vr.c gates on it), so turning
-+    // it on switches into first-person and syncs the First Person checkbox.
++    // it on switches the VR Mode dropdown to First-person.
 +    if (sFlipCam && vr_is_active() && !vr_first_person_active()) {
 +        vr_set_first_person(true);
 +        set_first_person_enabled(true);
++        sVrMode = (unsigned int)vr_get_preset_index();
++        if (sbMode) { djui_selectionbox_update_value(&sbMode->base); }
 +        sFp = true;
 +        if (cbFp) { djui_base_set_visible(&cbFp->rectValue->base, sFp); }
 +    }
@@ -1363,15 +1381,20 @@ index 0000000..6553dce
 +    vr_panel_seed_proxies();
 +    // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
 +    // previous open must not be reused.
-+    cbFp = cbShowBody = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
++    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
++    sbMode = NULL;
 +    slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 +
 +    struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
 +    struct DjuiBase* body = djui_three_panel_get_body(panel);
 +    {
-+        // First person works in both flatscreen and VR, so it's always shown.
-+        cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
-+        cbShowBody = djui_checkbox_create(body, "FP Show Body", &sShowBody, vr_panel_showbody_changed);
++        // VR shows the mode dropdown (Tabletop / Close-up / First-person). Flatscreen, where the shrunk
++        // -world modes don't apply, just gets the first-person toggle.
++        if (vr_is_requested()) {
++            sbMode = djui_selectionbox_create(body, "VR Mode", sVrModeChoices, 3, &sVrMode, vr_panel_mode_changed);
++        } else {
++            cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
++        }
 +        cbFlipCam = djui_checkbox_create(body, "FP Flip Cam (intense)", &sFlipCam, vr_panel_flipcam_changed);
 +        cbInteractCam = djui_checkbox_create(body, "FP Ease-Back on Interact", &sInteractCam, vr_panel_interactcam_changed);
 +
@@ -1428,10 +1451,10 @@ index ff35d03..5e2f98b 100644
      glEnable(GL_SCISSOR_TEST);
  }
 diff --git a/src/pc/gfx/gfx_pc.c b/src/pc/gfx/gfx_pc.c
-index 6563430..e27632e 100644
+index 6563430..728f07d 100644
 --- a/src/pc/gfx/gfx_pc.c
 +++ b/src/pc/gfx/gfx_pc.c
-@@ -659,6 +659,37 @@ static void calculate_normal_dir(const Light_t *light, Vec3f coeffs, bool applyL
+@@ -659,6 +659,42 @@ static void calculate_normal_dir(const Light_t *light, Vec3f coeffs, bool applyL
      vec3f_normalize(coeffs);
  }
  
@@ -1443,6 +1466,11 @@ index 6563430..e27632e 100644
 +bool        gVrEyeActive     = false;  // eye pass (read by gfx_opengl for the sky-color clear)
 +static bool gVrOverlayActive = false;  // overlay pass: render only 2D
 +static bool gVrOverlaySky    = false;  // overlay pass kind: true = sky (2D before 3D), false = HUD (after)
++// Desktop-mirror skybox perspective preservation (see gfx_run / gfx_sp_matrix): snapshot the flatscreen
++// 3D perspective while the mirror renders, restore it for the next mirror frame's skybox MUL.
++static float sLastFlatPersp[4][4];
++static bool  sLastFlatPerspValid = false;
++static bool  sInFlatRun = false;
 +bool        gVrSeenPerspective = false; // a 3D draw has occurred this pass (sky/HUD split point)
 +bool        gVrFrameHasPerspective = false; // did the world (any 3D) draw this frame? set by pc_main after the eye passes
 +static int  sVrOverlayKept = 0; // diagnostic: 2D tris kept in the current overlay pass
@@ -1469,7 +1497,20 @@ index 6563430..e27632e 100644
  static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
  
      Mat4 matrix;
-@@ -705,7 +736,7 @@ static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
+@@ -693,6 +729,12 @@ static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
+         } else {
+             mtxf_mul(rsp.P_matrix, matrix, rsp.P_matrix);
+         }
++        // While the desktop mirror renders, snapshot the flatscreen 3D perspective (P[3][3] ~ 0) so the
++        // next mirror frame's skybox can compose against it even after VR passes overwrite P_matrix.
++        if (sInFlatRun && rsp.P_matrix[3][3] < 0.5f) {
++            mtxf_copy(sLastFlatPersp, rsp.P_matrix);
++            sLastFlatPerspValid = true;
++        }
+     } else { // G_MTX_MODELVIEW
+         if ((parameters & G_MTX_PUSH) && rsp.modelview_matrix_stack_size < MAX_MATRIX_STACK_SIZE) {
+             ++rsp.modelview_matrix_stack_size;
+@@ -705,7 +747,7 @@ static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
          }
          rsp.lights_changed = 1;
      }
@@ -1478,7 +1519,7 @@ index 6563430..e27632e 100644
  }
  
  static void gfx_sp_pop_matrix(uint32_t count) {
-@@ -713,13 +744,18 @@ static void gfx_sp_pop_matrix(uint32_t count) {
+@@ -713,13 +755,18 @@ static void gfx_sp_pop_matrix(uint32_t count) {
          if (rsp.modelview_matrix_stack_size > 0) {
              --rsp.modelview_matrix_stack_size;
              if (rsp.modelview_matrix_stack_size > 0) {
@@ -1498,7 +1539,7 @@ index 6563430..e27632e 100644
      float adjusted = x * gfx_current_dimensions.x_adjust_ratio;
  
      // Force 2D coordinates to be aligned perfectly on the nearest pixel
-@@ -1065,17 +1101,38 @@ static void OPTIMIZE_O3 gfx_sp_vertex(size_t n_vertices, size_t dest_index, cons
+@@ -1065,17 +1112,38 @@ static void OPTIMIZE_O3 gfx_sp_vertex(size_t n_vertices, size_t dest_index, cons
  }
  
  static void OPTIMIZE_O3 gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
@@ -1540,7 +1581,7 @@ index 6563430..e27632e 100644
          float dx1 = v1->x / (v1->w) - v2->x / (v2->w);
          float dy1 = v1->y / (v1->w) - v2->y / (v2->w);
          float dx2 = v3->x / (v3->w) - v2->x / (v2->w);
-@@ -1627,6 +1684,13 @@ static void gfx_dp_set_fill_color(uint32_t packed_color) {
+@@ -1627,6 +1695,13 @@ static void gfx_dp_set_fill_color(uint32_t packed_color) {
  }
  
  static void gfx_draw_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry) {
@@ -1554,7 +1595,27 @@ index 6563430..e27632e 100644
      uint32_t saved_other_mode_h = rdp.other_mode_h;
      uint32_t cycle_type = (rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE));
  
-@@ -2117,6 +2181,155 @@ void gfx_run(Gfx *commands) {
+@@ -2056,6 +2131,7 @@ static void gfx_sp_reset(void) {
+     num_gfx_states = 0;
+ }
+ 
++
+ void gfx_get_dimensions(uint32_t *width, uint32_t *height) {
+     gfx_wapi->get_dimensions(width, height);
+     if (configForce4By3) {
+@@ -2101,6 +2177,11 @@ void gfx_start_frame(void) {
+ 
+ void gfx_run(Gfx *commands) {
+     gfx_sp_reset();
++    sInFlatRun = true;
++    // In a VR session the desktop mirror renders after the VR passes left their projection resident;
++    // restore the flatscreen perspective so the mirror's skybox composes full-screen (no black bars).
++    { extern bool vr_is_active(void);
++      if (vr_is_active() && sLastFlatPerspValid) { mtxf_copy(rsp.P_matrix, sLastFlatPersp); } }
+ 
+     sHasInverseCameraMatrix = false;
+ 
+@@ -2117,6 +2198,158 @@ void gfx_run(Gfx *commands) {
      gfx_run_dl(commands);
  }
  
@@ -1575,6 +1636,7 @@ index 6563430..e27632e 100644
 +
 +    memcpy(gVrEyeVP, eyeViewProj, sizeof(gVrEyeVP));
 +    gfx_sp_reset();
++    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
 +    sHasInverseCameraMatrix = false;
 +    gVrSeenPerspective = false;
 +    gVrEyeActive = true;
@@ -1644,6 +1706,7 @@ index 6563430..e27632e 100644
 +    gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
 +
 +    gfx_sp_reset();
++    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
 +    sHasInverseCameraMatrix = false;
 +    gVrSeenPerspective = false;
 +    gVrOverlaySky = sky;
@@ -1687,6 +1750,7 @@ index 6563430..e27632e 100644
 +    gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
 +
 +    gfx_sp_reset();
++    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
 +    sHasInverseCameraMatrix = false;
 +    // FLAT: all VR flags FALSE -> drop nothing (gfx_sp_tri1 / gfx_draw_rectangle keep ALL tris+
 +    // rects), use the GAME projection (gfx_update_mp_matrix else-branch), opaque-black clear.
@@ -1993,10 +2057,10 @@ index 0d4f9f7..21c812e 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..1f10b10
+index 0000000..189f3bf
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,1028 @@
+@@ -0,0 +1,1096 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -2088,6 +2152,7 @@ index 0000000..1f10b10
 +static float sDioramaScale  = 1200.0f; // game units per meter (larger = smaller diorama)
 +static float sDioramaDist   = -0.17f;  // meters the anchor sits in front (-Z); default = Close-up preset
 +static float sDioramaHeight = 0.0f;    // meters above LOCAL origin (~eye height); default = Close-up preset
++static float sDioramaPitchRad = 0.0f;  // constant nose-down view tilt for diorama/close-up (rad); per-preset, 0 = level
 +static float sClipMargin    = 0.30f;   // anti-clip: keep the diorama this far from the head (backs off on lean-in)
 +// (eye-space clip planes are computed per-frame from sDioramaScale so a bigger
 +//  world isn't far-clipped to black - see vr_build_eye_matrix.)
@@ -2132,6 +2197,9 @@ index 0000000..1f10b10
 +static bool  sPanelAnchorValid = false;
 +static float sPanelAnchorPos[3] = {0.0f, 0.0f, 0.0f};
 +static float sPanelAnchorQy = 0.0f, sPanelAnchorQw = 1.0f; // yaw-only orientation captured at menu open
++static float sPanelEyeY      = 0.0f;   // locked eye-level Y for the panel (captured once when tracked)
++static bool  sPanelEyeYValid = false;  // so the panel sits at eye level and doesn't drift low on re-anchor
++static float sMenuVOffset    = 0.0f;   // vertical nudge for the menu panel (meters; + raises it)
 +
 +// Per-eye camera-space -> eye-clip matrices (row-vector; clip = p_cam * sEyeVP).
 +static float sEyeVP[2][4][4];
@@ -2145,6 +2213,8 @@ index 0000000..1f10b10
 +static float   sHeadRest[3] = {0,0,0};
 +static bool    sHeadRestSet = false;
 +static int     sHeadWarmup  = 0;     // frames before capturing rest (lets tracking settle so we don't grab a bad pose)
++static float   sHeadRestYawQy = 0.0f, sHeadRestYawQw = 1.0f; // INVERSE yaw captured at rest, to recenter the view on the user's initial gaze
++static bool    sYawRecenterSet = false;
 +static XrPosef sRenderPose[2];
 +static XrFovf  sRenderFov[2]; // symmetrized fov actually rendered + submitted
 +
@@ -2210,6 +2280,18 @@ index 0000000..1f10b10
 +    m[3][3] = 1.0f;
 +}
 +
++// World-Y (yaw-only) rotation from a yaw quaternion (0,qy,0,qw), row-vector convention (matches Rrv
++// in mat_view_from_pose). Used to recenter the view on the user's initial gaze yaw at startup.
++static void mat_yaw_from_quat(float m[4][4], float qy, float qw) {
++    float c = 1.0f - 2.0f * qy * qy;
++    float s = 2.0f * qw * qy;
++    memset(m, 0, sizeof(float) * 16);
++    m[0][0] = c; m[0][2] = -s;
++    m[1][1] = 1.0f;
++    m[2][0] = s; m[2][2] = c;
++    m[3][3] = 1.0f;
++}
++
 +// Build sEyeVP[eye] = A (camera->world diorama) * V (world->eye) * P (eye proj).
 +static void vr_build_eye_matrix(int eye) {
 +    // Head center (real, in meters).
@@ -2227,6 +2309,16 @@ index 0000000..1f10b10
 +    if (eye == 0 && !sHeadRestSet && sPoseTracked && ++sHeadWarmup >= 15) {
 +        sHeadRest[0] = cx; sHeadRest[1] = cy; sHeadRest[2] = cz; sHeadRestSet = true;
 +        printf("[VR] 6DoF rest captured at (%.2f, %.2f, %.2f)\n", cx, cy, cz);
++        // Snapshot the INVERSE of the initial head yaw so the view recenters on the user's starting gaze:
++        // the diorama ends up dead ahead no matter which way they were physically facing at launch.
++        {
++            float qy = sViews[0].pose.orientation.y, qw = sViews[0].pose.orientation.w;
++            float n = sqrtf(qy*qy + qw*qw);
++            if (n < 1e-6f) { qy = 0.0f; qw = 1.0f; n = 1.0f; }
++            sHeadRestYawQy = -qy / n; // conjugate (negate qy) = inverse yaw
++            sHeadRestYawQw =  qw / n;
++            sYawRecenterSet = true;
++        }
 +    }
 +    float dcx = cx, dcy = cy, dcz = cz; // full pose until rest is captured (no damping yet)
 +    if (sHeadRestSet) {
@@ -2284,24 +2376,34 @@ index 0000000..1f10b10
 +    fov.angleDown = -aV; fov.angleUp = aV;
 +    sRenderFov[eye] = fov;
 +
-+    // First-person flip cam: roll the view about the eye's forward axis (eye-space Z) so the headset
-+    // follows Mario's flips. Build the roll once; reuse for the eye and the sky dome so they stay locked
-+    // together. Only in first-person; sFlipRollRad == 0 leaves everything upright.
-+    bool  doFlipRoll = (sFirstPerson && sFlipRollRad != 0.0f);
-+    float flipRz[4][4] = {{0}};
++    // PITCH the view about the eye's right axis (eye-space X). First-person uses the animated flip
++    // (sFlipRollRad) so the headset follows Mario's somersaults nose over tail. Diorama/close-up uses a
++    // constant nose-DOWN tilt (sDioramaPitchRad, per-preset) so the shrunk world sits below your gaze
++    // like a model on a table. Built once; reused for the eye and the sky dome so they stay locked.
++    float pitchRad = sFirstPerson ? sFlipRollRad : -sDioramaPitchRad;
++    bool  doFlipRoll = (pitchRad != 0.0f);
++    float flipRx[4][4] = {{0}};
 +    if (doFlipRoll) {
-+        float cr = cosf(sFlipRollRad), sr = sinf(sFlipRollRad);
-+        flipRz[0][0] = cr; flipRz[0][1] = sr; flipRz[0][2] = 0.0f; flipRz[0][3] = 0.0f;
-+        flipRz[1][0] =-sr; flipRz[1][1] = cr; flipRz[1][2] = 0.0f; flipRz[1][3] = 0.0f;
-+        flipRz[2][0] = 0.0f; flipRz[2][1] = 0.0f; flipRz[2][2] = 1.0f; flipRz[2][3] = 0.0f;
-+        flipRz[3][0] = 0.0f; flipRz[3][1] = 0.0f; flipRz[3][2] = 0.0f; flipRz[3][3] = 1.0f;
++        float cp = cosf(pitchRad), sp = sinf(pitchRad);
++        flipRx[0][0] = 1.0f; flipRx[0][1] = 0.0f; flipRx[0][2] = 0.0f; flipRx[0][3] = 0.0f;
++        flipRx[1][0] = 0.0f; flipRx[1][1] = cp;   flipRx[1][2] = sp;   flipRx[1][3] = 0.0f;
++        flipRx[2][0] = 0.0f; flipRx[2][1] = -sp;  flipRx[2][2] = cp;   flipRx[2][3] = 0.0f;
++        flipRx[3][0] = 0.0f; flipRx[3][1] = 0.0f; flipRx[3][2] = 0.0f; flipRx[3][3] = 1.0f;
 +    }
 +
 +    float V[4][4], P[4][4], AV[4][4];
 +    mat_view_from_pose(V, pose);
++    // Startup yaw recenter: rotate the world by the inverse of the initial gaze yaw so the diorama is
++    // dead ahead regardless of which way the user was physically facing at launch. World-side rotation
++    // (Yaw * V), orthogonal to the eye-side diorama pitch (V * flipRx), so they don't interact.
++    float Yaw[4][4]; bool haveYaw = sYawRecenterSet;
++    if (haveYaw) {
++        mat_yaw_from_quat(Yaw, sHeadRestYawQy, sHeadRestYawQw);
++        float Vy[4][4]; mat_mul(Vy, Yaw, V); memcpy(V, Vy, sizeof(V));
++    }
 +    mat_proj_fov(P, fov, zn, zf);
 +    if (doFlipRoll) {
-+        float Vr[4][4]; mat_mul(Vr, V, flipRz); // V' = V * Rz  (roll the eye view)
++        float Vr[4][4]; mat_mul(Vr, V, flipRx); // V' = V * Rx  (pitch the eye view)
 +        mat_mul(AV, A, Vr);
 +    } else {
 +        mat_mul(AV, A, V);
@@ -2315,9 +2417,10 @@ index 0000000..1f10b10
 +    skyPose.position.x = skyPose.position.y = skyPose.position.z = 0.0f;
 +    float Vsky[4][4], Psky[4][4];
 +    mat_view_from_pose(Vsky, skyPose);
++    if (haveYaw) { float Vy[4][4]; mat_mul(Vy, Yaw, Vsky); memcpy(Vsky, Vy, sizeof(Vsky)); } // recenter sky with the eye
 +    mat_proj_fov(Psky, fov, 1.0f, 5000.0f);
 +    if (doFlipRoll) {
-+        float Vskyr[4][4]; mat_mul(Vskyr, Vsky, flipRz); // roll the sky dome with the eye view
++        float Vskyr[4][4]; mat_mul(Vskyr, Vsky, flipRx); // pitch the sky dome with the eye view
 +        mat_mul(sSkyVP[eye], Vskyr, Psky);
 +    } else {
 +        mat_mul(sSkyVP[eye], Vsky, Psky);
@@ -2602,6 +2705,11 @@ index 0000000..1f10b10
 +                    sHeadRestSet = false;
 +                    sHeadWarmup  = 0;
 +                }
++                // Re-don: also re-center the startup yaw and re-lock the menu eye height so the view and
++                // the menu re-center fresh on the current gaze after the headset comes back.
++                sYawRecenterSet   = false;
++                sPanelEyeYValid   = false;
++                sPanelAnchorValid = false;
 +            }
 +        }
 +        ev.type = XR_TYPE_EVENT_DATA_BUFFER; // reset for next poll
@@ -2620,11 +2728,13 @@ index 0000000..1f10b10
 +// --- VR presets (selectable looks) -------------------------------------------
 +// First-person is now a preset: it enables coopdx's first-person camera (camera at Mario's head)
 +// and renders life-size at 1:1 instead of the shrunk diorama. F10 cycles Diorama / Close-up / First-person.
-+typedef struct { const char *name; float scale, dist, height, stereo; bool firstPerson; } VrPreset;
++typedef struct { const char *name; float scale, dist, height, stereo, pitch; bool firstPerson; } VrPreset;
 +static const VrPreset sPresets[] = {
-+    { "Diorama",      1200.0f,  0.37f, -0.20f, 0.21f, false },
-+    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, false },
-+    { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, true  }, // life-size, eye at Mario's head, full 6DoF
++    // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax, and a
++    // ~13 deg nose-down tilt so you look DOWN at it like a model on a table.
++    { "Tabletop",     3000.0f,  0.25f, -0.35f, 0.45f, 0.22f, false },
++    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false },
++    { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, 0.00f, true  }, // life-size, eye at Mario's head, full 6DoF
 +};
 +#define VR_NUM_PRESETS ((int)(sizeof(sPresets) / sizeof(sPresets[0])))
 +static int sCurrentPreset = 1; // launch default = Close-up
@@ -2636,6 +2746,7 @@ index 0000000..1f10b10
 +    sDioramaDist   = sPresets[idx].dist;
 +    sDioramaHeight = sPresets[idx].height;
 +    sStereoScale   = sPresets[idx].stereo;
++    sDioramaPitchRad = sPresets[idx].pitch;
 +    sFirstPerson   = sPresets[idx].firstPerson;
 +    sHeadScale     = sFirstPerson ? 1.0f : 0.4f; // life-size wants true 1:1 head motion; diorama wants damping
 +    sHeadRestSet   = false; sHeadWarmup = 0;
@@ -2646,6 +2757,10 @@ index 0000000..1f10b10
 +}
 +
 +// --- In-game VR menu accessors (used by djui_panel_vr.c) ---------------------
++int   vr_get_preset_index(void)      { return sCurrentPreset; }
++void  vr_set_preset_index(int idx)   { vr_apply_preset(idx); } // 0=Tabletop, 1=Close-up, 2=First-person
++int   vr_get_preset_count(void)      { return VR_NUM_PRESETS; }
++const char* vr_get_preset_name(int i){ return (i >= 0 && i < VR_NUM_PRESETS) ? sPresets[i].name : ""; }
 +float vr_get_menu_dist(void)         { return sMenuDist; }
 +void  vr_set_menu_dist(float v)      { sMenuDist = v; }
 +float vr_get_menu_size(void)         { return sMenuSize; }
@@ -2669,7 +2784,10 @@ index 0000000..1f10b10
 +    vr_apply_preset(1);     // Close-up: resets scale/dist/height/stereo/first-person/head-damping
 +    sMenuDist = 3.0f;
 +    sMenuSize = 4.8f;
++    sMenuVOffset = 0.0f;
 +    sPanelAnchorValid = false;
++    sPanelEyeYValid = false;  // re-lock the menu eye height
++    sYawRecenterSet = false;  // re-center the view yaw on the next tracked pose
 +    sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
 +    printf("[VR] reset to defaults.\n");
 +}
@@ -2691,7 +2809,14 @@ index 0000000..1f10b10
 +}
 +
 +// First-person flip cam: how much to roll the eye view this frame (radians).
-+void  vr_set_flip_roll(float radians) { sFlipRollRad = radians; }
++void  vr_set_flip_roll(float radians) {
++    // The target comes from Mario's animation frame, which advances at the 30fps game rate, so at the
++    // 90fps headset rate a direct set would stair-step every 3 frames (choppy). Ease toward the target
++    // each frame (called once per VR frame) so the flip pitch is continuous and smooth. Snap when very
++    // close so it settles cleanly at 0 between flips.
++    sFlipRollRad += (radians - sFlipRollRad) * 0.22f;
++    if (fabsf(radians - sFlipRollRad) < 0.0008f) { sFlipRollRad = radians; }
++}
 +
 +// The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
 +// is tuned from the in-game Options -> VR menu.
@@ -2835,7 +2960,7 @@ index 0000000..1f10b10
 +// run to the edges), false = centered 4:3 region on a taller quad (the title/main menu, so no void).
 +// Either way the panel is world-locked. Changing it re-centers the panel on your current facing.
 +void vr_set_panel_full_frame(bool full) {
-+    if (full != sPanelFullFrame) { sPanelAnchorValid = false; }
++    if (full != sPanelFullFrame) { sPanelAnchorValid = false; sPanelEyeYValid = false; }
 +    sPanelFullFrame = full;
 +}
 +
@@ -2913,8 +3038,15 @@ index 0000000..1f10b10
 +                    bool reAnchor = !sPanelAnchorValid || !sPoseTracked || (dot < 0.57f); // 0.57 ~= cos(55 deg)
 +                    if (reAnchor) {
 +                        sPanelAnchorPos[0] = 0.5f * (sViews[0].pose.position.x + sViews[1].pose.position.x);
-+                        sPanelAnchorPos[1] = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
 +                        sPanelAnchorPos[2] = 0.5f * (sViews[0].pose.position.z + sViews[1].pose.position.z);
++                        // Lock the panel Y to the FIRST tracked eye height and reuse it, so the menu sits at
++                        // eye level instead of drifting low when re-anchored while looking down / at a bad Y.
++                        if (!sPanelEyeYValid && sPoseTracked) {
++                            sPanelEyeY = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
++                            sPanelEyeYValid = true;
++                        }
++                        sPanelAnchorPos[1] = sPanelEyeYValid ? sPanelEyeY
++                                          : 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
 +                        sPanelAnchorQy = cqy; sPanelAnchorQw = cqw;
 +                        sPanelAnchorValid = sPoseTracked; // only "lock in" once the pose is real
 +                    }
@@ -2929,7 +3061,7 @@ index 0000000..1f10b10
 +                hudQuad.pose.orientation.z = 0.0f;
 +                hudQuad.pose.orientation.w = qw;
 +                hudQuad.pose.position.x = sPanelAnchorPos[0] + sMenuDist * fwdx;
-+                hudQuad.pose.position.y = sPanelAnchorPos[1];
++                hudQuad.pose.position.y = (sPanelEyeYValid ? sPanelEyeY : sPanelAnchorPos[1]) + sMenuVOffset;
 +                hudQuad.pose.position.z = sPanelAnchorPos[2] + sMenuDist * fwdz;
 +                layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
 +            }
@@ -3027,10 +3159,10 @@ index 0000000..1f10b10
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..d5be302
+index 0000000..b959ead
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,84 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -3056,6 +3188,8 @@ index 0000000..d5be302
 +
 +// In-game VR options menu accessors (driven by the DJUI "VR" panel).
 +void  vr_set_first_person(bool on);     // toggle the first-person preset (life-size, eye at Mario's head)
++int   vr_get_preset_index(void); void vr_set_preset_index(int idx); // VR mode: 0=Tabletop, 1=Close-up, 2=First-person
++int   vr_get_preset_count(void); const char* vr_get_preset_name(int i);
 +float vr_get_menu_dist(void);    void vr_set_menu_dist(float v);    // flat menu panel distance (meters)
 +float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu panel width (meters)
 +float vr_get_diorama_dist(void); void vr_set_diorama_dist(float v); // diorama anchor distance (meters)

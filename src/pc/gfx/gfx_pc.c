@@ -667,6 +667,11 @@ static void calculate_normal_dir(const Light_t *light, Vec3f coeffs, bool applyL
 bool        gVrEyeActive     = false;  // eye pass (read by gfx_opengl for the sky-color clear)
 static bool gVrOverlayActive = false;  // overlay pass: render only 2D
 static bool gVrOverlaySky    = false;  // overlay pass kind: true = sky (2D before 3D), false = HUD (after)
+// Desktop-mirror skybox perspective preservation (see gfx_run / gfx_sp_matrix): snapshot the flatscreen
+// 3D perspective while the mirror renders, restore it for the next mirror frame's skybox MUL.
+static float sLastFlatPersp[4][4];
+static bool  sLastFlatPerspValid = false;
+static bool  sInFlatRun = false;
 bool        gVrSeenPerspective = false; // a 3D draw has occurred this pass (sky/HUD split point)
 bool        gVrFrameHasPerspective = false; // did the world (any 3D) draw this frame? set by pc_main after the eye passes
 static int  sVrOverlayKept = 0; // diagnostic: 2D tris kept in the current overlay pass
@@ -723,6 +728,12 @@ static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
             mtxf_copy(rsp.P_matrix, matrix);
         } else {
             mtxf_mul(rsp.P_matrix, matrix, rsp.P_matrix);
+        }
+        // While the desktop mirror renders, snapshot the flatscreen 3D perspective (P[3][3] ~ 0) so the
+        // next mirror frame's skybox can compose against it even after VR passes overwrite P_matrix.
+        if (sInFlatRun && rsp.P_matrix[3][3] < 0.5f) {
+            mtxf_copy(sLastFlatPersp, rsp.P_matrix);
+            sLastFlatPerspValid = true;
         }
     } else { // G_MTX_MODELVIEW
         if ((parameters & G_MTX_PUSH) && rsp.modelview_matrix_stack_size < MAX_MATRIX_STACK_SIZE) {
@@ -2120,6 +2131,7 @@ static void gfx_sp_reset(void) {
     num_gfx_states = 0;
 }
 
+
 void gfx_get_dimensions(uint32_t *width, uint32_t *height) {
     gfx_wapi->get_dimensions(width, height);
     if (configForce4By3) {
@@ -2165,6 +2177,11 @@ void gfx_start_frame(void) {
 
 void gfx_run(Gfx *commands) {
     gfx_sp_reset();
+    sInFlatRun = true;
+    // In a VR session the desktop mirror renders after the VR passes left their projection resident;
+    // restore the flatscreen perspective so the mirror's skybox composes full-screen (no black bars).
+    { extern bool vr_is_active(void);
+      if (vr_is_active() && sLastFlatPerspValid) { mtxf_copy(rsp.P_matrix, sLastFlatPersp); } }
 
     sHasInverseCameraMatrix = false;
 
@@ -2198,6 +2215,7 @@ void gfx_run_dl_vr_eye(Gfx *commands, const float eyeViewProj[16], const float s
 
     memcpy(gVrEyeVP, eyeViewProj, sizeof(gVrEyeVP));
     gfx_sp_reset();
+    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
     sHasInverseCameraMatrix = false;
     gVrSeenPerspective = false;
     gVrEyeActive = true;
@@ -2267,6 +2285,7 @@ void gfx_run_dl_vr_overlay(Gfx *commands, int w, int h, bool sky) {
     gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
 
     gfx_sp_reset();
+    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
     sHasInverseCameraMatrix = false;
     gVrSeenPerspective = false;
     gVrOverlaySky = sky;
@@ -2310,6 +2329,7 @@ void gfx_run_dl_vr_panel(Gfx *commands, int w, int h) {
     gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
 
     gfx_sp_reset();
+    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
     sHasInverseCameraMatrix = false;
     // FLAT: all VR flags FALSE -> drop nothing (gfx_sp_tri1 / gfx_draw_rectangle keep ALL tris+
     // rects), use the GAME projection (gfx_update_mp_matrix else-branch), opaque-black clear.

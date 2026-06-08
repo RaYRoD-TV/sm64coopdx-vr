@@ -6,7 +6,6 @@
 #include "behavior_actions.h"
 #include "behavior_data.h"
 #include "camera.h"
-#include "first_person_cam.h"
 #include "dialog_ids.h"
 #include "engine/behavior_script.h"
 #include "engine/graph_node.h"
@@ -518,15 +517,6 @@ Gfx* geo_mario_head_rotation(s32 callContext, struct GraphNode* node, Mat4* c) {
     if (callContext == GEO_CONTEXT_RENDER) {
         struct GraphNodeRotation* rotNode = (struct GraphNodeRotation*) node->next;
         struct Camera* camera = gCurGraphNodeCamera->config.camera;
-
-        // First-person "show body": hide the LOCAL player's head subtree (eyes/face/cap/wings) so the
-        // torso/arms/legs are visible without the inside of Mario's head filling the view. Local player
-        // only, so co-op partners are unaffected.
-        if (plrIdx == 0 && gFirstPersonCamera.enabled && gFirstPersonCamera.showBody) {
-            node->flags &= ~GRAPH_RENDER_ACTIVE;
-            return NULL;
-        }
-        node->flags |= GRAPH_RENDER_ACTIVE; // re-enable when not hiding (it may have been cleared last frame)
 
         if (!marioActive) {
             node->flags &= ~GRAPH_RENDER_ACTIVE;

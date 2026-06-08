@@ -92,6 +92,9 @@ struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel*
     sMoveAmount = 0;
 
     if (firstPanel) {
+        // A menu just opened: route the controller to the menu pad. Tied to panel-list lifecycle here
+        // (not per-creator) so it can't drift off as you navigate sub-panels.
+        gInteractableOverridePad = true;
         djui_base_set_location(panelBase, 0, 0);
         djui_cursor_input_controlled_center(panel->defaultElementBase);
         djui_base_set_enabled(panel->base, true);
@@ -145,6 +148,10 @@ void djui_panel_back(void) {
 
 void djui_panel_update(void) {
     if (sPanelList == NULL) { return; }
+    // Self-heal: a menu is active, so controller input must route to the menu pad. If anything cleared
+    // the flag mid-session (a panel close, a mod, etc.) this puts it back within one frame, so the
+    // gamepad can never get stuck dead in a menu.
+    if (!gInteractableOverridePad) { gInteractableOverridePad = true; }
     if (sPanelList->base == NULL) { return; }
     if (sPanelList->base->elem.height == 0) { return; }
 

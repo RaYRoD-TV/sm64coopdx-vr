@@ -25,9 +25,9 @@ struct FirstPersonCamera gFirstPersonCamera = {
     .forceYaw = false,
     .forceRoll = true,
     .centerL = true,
-    .showBody = false,
     .flipCam = false,
     .interactCam = true,
+    .easeBack = 0.0f,
     .pitch = 0,
     .yaw = 0,
     .crouch = 0,
@@ -148,17 +148,17 @@ static void first_person_camera_update(void) {
     // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
     // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
     // yourself act. Ease out is slower than ease in so rapid punches don't snap the camera around.
-    static f32 sPullback = 0.0f;
     bool wantPull = gFirstPersonCamera.interactCam
                  && (get_dialog_id() != DIALOG_NONE || (m->action & ACT_FLAG_ATTACKING) != 0);
     f32 pTarget = wantPull ? 1.0f : 0.0f;
-    sPullback += (pTarget - sPullback) * ((pTarget > sPullback) ? 0.12f : 0.06f);
+    gFirstPersonCamera.easeBack += (pTarget - gFirstPersonCamera.easeBack)
+                                 * ((pTarget > gFirstPersonCamera.easeBack) ? 0.12f : 0.06f);
 
-    if (sPullback > 0.001f) {
+    if (gFirstPersonCamera.easeBack > 0.001f) {
         Vec3f look = { fpFocus[0] - fpPos[0], fpFocus[1] - fpPos[1], fpFocus[2] - fpPos[2] };
         vec3f_normalize(look);
-        f32 t = sPullback;
-        f32 dist = 420.0f * t, up = 170.0f * t;
+        f32 t = gFirstPersonCamera.easeBack;
+        f32 dist = 540.0f * t, up = 210.0f * t; // pull back far enough to frame Mario fully
         Vec3f marioHead = {
             m->pos[0] + gFirstPersonCamera.offset[0],
             m->pos[1] + gFirstPersonCamera.offset[1] + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch),
@@ -216,13 +216,14 @@ void first_person_update(void) {
             level_trigger_warp(m, WARP_OP_LOOK_UP);
         }
 
-        if (gFirstPersonCamera.showBody) {
-            // Show the body: clear only the alpha-hide bit so torso/arms/legs render. The head
-            // subtree is hidden separately in geo_mario_head_rotation so it can't fill the view.
-            // Clearing only 0x100 keeps the cap-effect high byte (wing/vanish/metal) intact.
-            m->marioBodyState->modelState &= ~0x100;
+        // First-person: Mario is invisible, and snaps to SOLID (opaque, never half-transparent) only
+        // once the camera has pulled CLEAR of his body. Below the threshold the camera is close to /
+        // inside Mario, so he's hidden - otherwise easing back in would show the camera passing through
+        // his solid body. Clearing only 0x100 keeps him opaque and preserves the cap-effect high byte.
+        if (gFirstPersonCamera.easeBack > 0.30f) {
+            m->marioBodyState->modelState &= ~0x100; // solid / opaque (camera is pulled clear of the body)
         } else {
-            m->marioBodyState->modelState = 0x100; // fully invisible (the original first-person look)
+            m->marioBodyState->modelState = 0x100;   // fully invisible (near the head; no body interior shown)
         }
         if (m->heldObj) {
             Vec3f camDir = {
@@ -242,9 +243,9 @@ void first_person_update(void) {
 void first_person_reset(void) {
     gFirstPersonCamera.forceRoll = false;
     gFirstPersonCamera.centerL = true;
-    gFirstPersonCamera.showBody = false;
     gFirstPersonCamera.flipCam = false;
     gFirstPersonCamera.interactCam = true;
+    gFirstPersonCamera.easeBack = 0.0f;
     gFirstPersonCamera.pitch = 0;
     gFirstPersonCamera.yaw = 0;
     gFirstPersonCamera.crouch = 0;
@@ -261,20 +262,28 @@ void first_person_reset(void) {
 // FP Flip Cam toggle is on.
 s16 first_person_flip_roll(struct MarioState *m) {
     if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
-    f32 turns;
+    // Drives a PITCH flip in VR (nose over tail), not a barrel roll. Sign tuned on the headset: forward
+    // somersaults pitch the view FORWARD (+1), back somersaults pitch BACK (-1). Triple jump + star/wing
+    // triple jumps + side ("slide") flip + forward rollout are forward; backflip + backward rollout back.
+    f32 dir;
     switch (m->action) {
-        case ACT_BACKFLIP:         turns = -1.0f; break;
-        case ACT_SIDE_FLIP:        turns =  1.0f; break;
-        case ACT_FORWARD_ROLLOUT:  turns =  1.0f; break;
-        case ACT_BACKWARD_ROLLOUT: turns = -1.0f; break;
-        default:                   return 0;
+        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip
+        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward (star/cap triple jump)
+        case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward (wing cap triple jump)
+        case ACT_SIDE_FLIP:           dir =  1.0f; break; // "slide flip" -> forward
+        case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll
+        case ACT_BACKFLIP:            dir = -1.0f; break; // back flip
+        case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll
+        default:                      return 0;
     }
     struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
     if (a->curAnim == NULL || a->curAnim->loopEnd <= 1) { return 0; }
     f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
     if (progress < 0.0f) { progress = 0.0f; }
     if (progress > 1.0f) { progress = 1.0f; }
-    return (s16)(progress * turns * 65536.0f);
+    // Smoothstep (3t^2 - 2t^3) so the flip eases in and out instead of the old linear snap.
+    f32 eased = progress * progress * (3.0f - 2.0f * progress);
+    return (s16)(eased * dir * 65536.0f);
 }
 
 // Convenience for the VR bridge (pc_main): the local player's flip roll in radians. s16 angle units

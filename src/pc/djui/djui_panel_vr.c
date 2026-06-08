@@ -4,8 +4,12 @@
 #include "djui_panel_vr.h"
 #include "djui_slider.h"
 #include "djui_checkbox.h"
+#include "djui_selectionbox.h"
 #include "pc/vr/vr.h"
 #include "game/first_person_cam.h"
+
+// VR mode dropdown choices (order matches the vr.c preset table: 0=Tabletop, 1=Close-up, 2=First-person).
+static char* sVrModeChoices[] = { "Tabletop", "Close-up", "First-person" };
 
 // In-game VR settings. DJUI sliders are integer-valued, so each one uses a small proxy that scales
 // to/from the VR module's float tunables. Values apply live as you drag, and you can see the current
@@ -13,8 +17,8 @@
 // the on-screen widgets (DJUI only redraws a slider/checkbox when its value is changed through the
 // widget, so after a reset we have to nudge each one to redraw - otherwise the handles look stuck).
 
-static bool sFp;                // first person on/off
-static bool sShowBody;          // first person: show Mario's body (torso/arms/legs)
+static bool sFp;                // first person on/off (flatscreen toggle)
+static unsigned int sVrMode;    // VR mode index: 0=Tabletop, 1=Close-up, 2=First-person
 static bool sFlipCam;           // first person: roll the view with Mario's flip jumps
 static bool sInteractCam;       // first person: ease back to show Mario when interacting/attacking
 static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
@@ -27,7 +31,8 @@ static unsigned int sStereoI;   // stereo depth, hundredths (0..200 = 0.0..2.0)
 static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 
 // Widget handles, so Reset to Default can refresh what's on screen.
-static struct DjuiCheckbox *cbFp, *cbShowBody, *cbFlipCam, *cbInteractCam, *cbAntiClip;
+static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip;
+static struct DjuiSelectionbox *sbMode;
 static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 
 static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
@@ -39,7 +44,7 @@ static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
 // Pull the live VR values into the slider proxies so the widgets show the real state.
 static void vr_panel_seed_proxies(void) {
     sFp         = vr_first_person_active() || get_first_person_enabled();
-    sShowBody   = gFirstPersonCamera.showBody;
+    sVrMode     = (unsigned int)vr_get_preset_index();
     sFlipCam    = gFirstPersonCamera.flipCam;
     sInteractCam = gFirstPersonCamera.interactCam;
     sAntiClip   = vr_anticlip_is_enabled();
@@ -55,7 +60,7 @@ static void vr_panel_seed_proxies(void) {
 // Redraw every widget from its (just re-seeded) proxy value.
 static void vr_panel_refresh_widgets(void) {
     if (cbFp)       { djui_base_set_visible(&cbFp->rectValue->base,       sFp); }
-    if (cbShowBody) { djui_base_set_visible(&cbShowBody->rectValue->base, sShowBody); }
+    if (sbMode)     { djui_selectionbox_update_value(&sbMode->base); }
     if (cbFlipCam)  { djui_base_set_visible(&cbFlipCam->rectValue->base,  sFlipCam); }
     if (cbInteractCam) { djui_base_set_visible(&cbInteractCam->rectValue->base, sInteractCam); }
     if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
@@ -72,6 +77,10 @@ static void vr_panel_fp_changed(UNUSED struct DjuiBase* caller) {
     set_first_person_enabled(sFp);                    // game first-person camera (flatscreen + VR base view)
     if (vr_is_active()) { vr_set_first_person(sFp); } // VR: render life-size at Mario's head
 }
+static void vr_panel_mode_changed(UNUSED struct DjuiBase* caller) {
+    // 0=Tabletop, 1=Close-up, 2=First-person. First-person also drives the game camera (synced by pc_main).
+    vr_set_preset_index((int)sVrMode);
+}
 static void vr_panel_menu_dist_changed(UNUSED struct DjuiBase* caller) { vr_set_menu_dist((float)sMenuDistI / 10.0f); }
 static void vr_panel_menu_size_changed(UNUSED struct DjuiBase* caller) { vr_set_menu_size((float)sMenuSizeI / 10.0f); }
 static void vr_panel_dio_dist_changed(UNUSED struct DjuiBase* caller)  { vr_set_diorama_dist((float)sDioDistI / 100.0f - 2.0f); }
@@ -80,15 +89,16 @@ static void vr_panel_dio_height_changed(UNUSED struct DjuiBase* caller){ vr_set_
 static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
-static void vr_panel_showbody_changed(UNUSED struct DjuiBase* caller)  { gFirstPersonCamera.showBody = sShowBody; }
 static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; }
 static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
     gFirstPersonCamera.flipCam = sFlipCam;
     // Flip Cam only does anything in the VR first-person view (the roll in vr.c gates on it), so turning
-    // it on switches into first-person and syncs the First Person checkbox.
+    // it on switches the VR Mode dropdown to First-person.
     if (sFlipCam && vr_is_active() && !vr_first_person_active()) {
         vr_set_first_person(true);
         set_first_person_enabled(true);
+        sVrMode = (unsigned int)vr_get_preset_index();
+        if (sbMode) { djui_selectionbox_update_value(&sbMode->base); }
         sFp = true;
         if (cbFp) { djui_base_set_visible(&cbFp->rectValue->base, sFp); }
     }
@@ -105,15 +115,20 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
     vr_panel_seed_proxies();
     // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
     // previous open must not be reused.
-    cbFp = cbShowBody = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
+    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
+    sbMode = NULL;
     slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 
     struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
     struct DjuiBase* body = djui_three_panel_get_body(panel);
     {
-        // First person works in both flatscreen and VR, so it's always shown.
-        cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
-        cbShowBody = djui_checkbox_create(body, "FP Show Body", &sShowBody, vr_panel_showbody_changed);
+        // VR shows the mode dropdown (Tabletop / Close-up / First-person). Flatscreen, where the shrunk
+        // -world modes don't apply, just gets the first-person toggle.
+        if (vr_is_requested()) {
+            sbMode = djui_selectionbox_create(body, "VR Mode", sVrModeChoices, 3, &sVrMode, vr_panel_mode_changed);
+        } else {
+            cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
+        }
         cbFlipCam = djui_checkbox_create(body, "FP Flip Cam (intense)", &sFlipCam, vr_panel_flipcam_changed);
         cbInteractCam = djui_checkbox_create(body, "FP Ease-Back on Interact", &sInteractCam, vr_panel_interactcam_changed);
 

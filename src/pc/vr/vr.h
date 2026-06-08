@@ -23,6 +23,8 @@ bool  vr_first_person_active(void);
 
 // In-game VR options menu accessors (driven by the DJUI "VR" panel).
 void  vr_set_first_person(bool on);     // toggle the first-person preset (life-size, eye at Mario's head)
+int   vr_get_preset_index(void); void vr_set_preset_index(int idx); // VR mode: 0=Tabletop, 1=Close-up, 2=First-person
+int   vr_get_preset_count(void); const char* vr_get_preset_name(int i);
 float vr_get_menu_dist(void);    void vr_set_menu_dist(float v);    // flat menu panel distance (meters)
 float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu panel width (meters)
 float vr_get_diorama_dist(void); void vr_set_diorama_dist(float v); // diorama anchor distance (meters)
