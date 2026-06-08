@@ -105,6 +105,7 @@ static bool  sHeadCamPosValid    = false;
 
 // First-person flip cam: roll (radians) applied to the eye view so the headset follows Mario's flips.
 static float sFlipRollRad        = 0.0f;
+static bool  sFlipIsSide         = false; // flip cam: true = side flip (roll about forward), false = pitch
 
 // Sky: a world-anchored cylinder that wraps around you (falls back to a flat quad
 // if the cylinder layer isn't supported). HUD/menu panel: head-locked, near.
@@ -313,19 +314,27 @@ static void vr_build_eye_matrix(int eye) {
     fov.angleDown = -aV; fov.angleUp = aV;
     sRenderFov[eye] = fov;
 
-    // PITCH the view about the eye's right axis (eye-space X). First-person uses the animated flip
-    // (sFlipRollRad) so the headset follows Mario's somersaults nose over tail. Diorama/close-up uses a
-    // constant nose-DOWN tilt (sDioramaPitchRad, per-preset) so the shrunk world sits below your gaze
-    // like a model on a table. Built once; reused for the eye and the sky dome so they stay locked.
-    float pitchRad = sFirstPerson ? sFlipRollRad : -sDioramaPitchRad;
-    bool  doFlipRoll = (pitchRad != 0.0f);
+    // Rotate the eye view for the flip cam / diorama tilt. First-person: forward/back somersaults PITCH
+    // about eye-space X (sFlipRollRad), the side flip ROLLs about eye-space Z, the forward axis
+    // (sFlipIsSide picks which). Diorama/close-up: a constant nose-DOWN pitch (sDioramaPitchRad) so the
+    // shrunk world sits below your gaze. Built once; reused for the eye and sky dome so they stay locked.
+    float pitchRad = 0.0f, rollRad = 0.0f;
+    if (sFirstPerson) {
+        if (sFlipIsSide) { rollRad = sFlipRollRad; } else { pitchRad = sFlipRollRad; }
+    } else {
+        pitchRad = -sDioramaPitchRad;
+    }
+    bool  doFlipRoll = (pitchRad != 0.0f || rollRad != 0.0f);
     float flipRx[4][4] = {{0}};
-    if (doFlipRoll) {
+    flipRx[0][0] = flipRx[1][1] = flipRx[2][2] = flipRx[3][3] = 1.0f; // identity base
+    if (pitchRad != 0.0f) {                 // pitch about X (forward/back flip, diorama tilt)
         float cp = cosf(pitchRad), sp = sinf(pitchRad);
-        flipRx[0][0] = 1.0f; flipRx[0][1] = 0.0f; flipRx[0][2] = 0.0f; flipRx[0][3] = 0.0f;
-        flipRx[1][0] = 0.0f; flipRx[1][1] = cp;   flipRx[1][2] = sp;   flipRx[1][3] = 0.0f;
-        flipRx[2][0] = 0.0f; flipRx[2][1] = -sp;  flipRx[2][2] = cp;   flipRx[2][3] = 0.0f;
-        flipRx[3][0] = 0.0f; flipRx[3][1] = 0.0f; flipRx[3][2] = 0.0f; flipRx[3][3] = 1.0f;
+        flipRx[1][1] = cp;  flipRx[1][2] = sp;
+        flipRx[2][1] = -sp; flipRx[2][2] = cp;
+    } else if (rollRad != 0.0f) {           // roll about Z = forward (side flip)
+        float cr = cosf(rollRad), sr = sinf(rollRad);
+        flipRx[0][0] = cr;  flipRx[0][1] = sr;
+        flipRx[1][0] = -sr; flipRx[1][1] = cr;
     }
 
     float V[4][4], P[4][4], AV[4][4];
@@ -756,6 +765,8 @@ void  vr_set_flip_roll(float radians) {
     sFlipRollRad += (radians - sFlipRollRad) * 0.22f;
     if (fabsf(radians - sFlipRollRad) < 0.0008f) { sFlipRollRad = radians; }
 }
+// Pick the flip axis: true = side flip (roll about the forward axis), false = forward/back flip (pitch).
+void  vr_set_flip_side(bool side) { sFlipIsSide = side; }
 
 // The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
 // is tuned from the in-game Options -> VR menu.
@@ -1080,6 +1091,7 @@ bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enab
 bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
 void  vr_anticlip_set_offset(const float m[3]) { (void)m; }
 void  vr_set_flip_roll(float radians) { (void)radians; }
+void  vr_set_flip_side(bool side) { (void)side; }
 int   vr_eye_count(void)     { return 0; }
 int   vr_eye_width(int e)    { (void)e; return 0; }
 int   vr_eye_height(int e)   { (void)e; return 0; }

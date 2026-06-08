@@ -42,5 +42,7 @@ void first_person_reset(void);
 s16 first_person_flip_roll(struct MarioState *m);
 /* |description|Local player's flip roll in radians for the VR eye view (0 when not flipping)|descriptionEnd| */
 f32 first_person_flip_roll_rad(void);
+/* |description|True while a side flip is in progress (camera rolls to the side instead of pitching)|descriptionEnd| */
+bool first_person_flip_is_side(struct MarioState *m);
 
 #endif // FIRST_PERSON_CAM_H

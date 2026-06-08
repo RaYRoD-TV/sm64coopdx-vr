@@ -27,6 +27,7 @@
 
 extern bool gDjuiInMainMenu;
 u8 gOverrideHideHud;
+u8 gMenuHideHud; // VR/options "Hide HUD" toggle (separate from the Lua/network-driven gOverrideHideHud)
 
 /* @file hud.c
  * This file implements HUD rendering and power meter animations.
@@ -623,7 +624,7 @@ void render_hud(void) {
         create_dl_ortho_matrix();
 #endif
 
-        bool showHud = (!gDjuiInMainMenu && !gOverrideHideHud);
+        bool showHud = (!gDjuiInMainMenu && !gOverrideHideHud && !gMenuHideHud);
 
         if (gCurrentArea != NULL && gCurrentArea->camera != NULL && gCurrentArea->camera->mode == CAMERA_MODE_INSIDE_CANNON) {
             render_hud_cannon_reticle();

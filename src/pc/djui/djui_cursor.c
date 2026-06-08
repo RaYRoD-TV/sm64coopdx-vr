@@ -53,6 +53,13 @@ static void djui_cursor_base_hover_location(struct DjuiBase* base, f32* x, f32* 
     base->get_cursor_hover_location(base, x, y);
 }
 
+// Hand the cursor back to controller/input control. Called when a menu opens so the gamepad works
+// immediately, even if the mouse owned the cursor beforehand (you open the pause menu with the
+// controller, but the mouse last moved it - the stick was being zeroed and the menu felt unresponsive).
+void djui_cursor_clear_mouse_control(void) {
+    sCursorMouseControlled = false;
+}
+
 void djui_cursor_input_controlled_center(struct DjuiBase* base) {
     if (!sCursorMouseControlled && (!base || (base && base->interactable && base->interactable->enabled))) {
         sInputControlledBase = base;

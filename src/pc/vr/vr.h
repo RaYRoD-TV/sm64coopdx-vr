@@ -44,6 +44,7 @@ void  vr_anticlip_set_offset(const float m[3]);  // smoothed anchor offset (mete
 // First-person flip cam: roll the eye view by this angle (radians) so the headset follows Mario's
 // flip jumps. Set each frame from pc_main; 0 = upright. Only applied in first-person mode.
 void  vr_set_flip_roll(float radians);
+void  vr_set_flip_side(bool side); // flip cam axis: true = side flip (roll), false = forward/back (pitch)
 
 // Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 // per-eye views. Call once before the eye loop.

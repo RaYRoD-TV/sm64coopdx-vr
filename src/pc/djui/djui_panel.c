@@ -95,6 +95,9 @@ struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel*
         // A menu just opened: route the controller to the menu pad. Tied to panel-list lifecycle here
         // (not per-creator) so it can't drift off as you navigate sub-panels.
         gInteractableOverridePad = true;
+        // Default the cursor to controller control on open, so the gamepad captures the menu (e.g. the
+        // pause menu) immediately instead of staying stuck on the mouse. The mouse takes over on any move.
+        djui_cursor_clear_mouse_control();
         djui_base_set_location(panelBase, 0, 0);
         djui_cursor_input_controlled_center(panel->defaultElementBase);
         djui_base_set_enabled(panel->base, true);

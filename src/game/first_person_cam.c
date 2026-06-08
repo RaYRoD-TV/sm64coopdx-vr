@@ -16,6 +16,7 @@
 #include "pc/controller/controller_mouse.h"
 #include "pc/djui/djui.h"
 #include "pc/djui/djui_hud_utils.h"
+#include "pc/vr/vr.h" // vr_is_active (flip cam pitches the eye in VR, the look here in flatscreen)
 #include "pc/lua/utils/smlua_camera_utils.h"
 #include "pc/lua/smlua_hooks.h"
 
@@ -38,7 +39,9 @@ struct FirstPersonCamera gFirstPersonCamera = {
 extern s16 gMenuMode;
 
 bool first_person_check_cancels(struct MarioState *m) {
-    if (m->action == ACT_FIRST_PERSON || m->action == ACT_IN_CANNON || m->action == ACT_READING_NPC_DIALOG || m->action == ACT_DISAPPEARED || m->action == ACT_FLYING) {
+    // Note: ACT_FLYING is intentionally NOT cancelled, so first-person stays on while flying (wing cap).
+    // The flying yaw/pitch is handled below in the per-action fix-up list.
+    if (m->action == ACT_FIRST_PERSON || m->action == ACT_IN_CANNON || m->action == ACT_READING_NPC_DIALOG || m->action == ACT_DISAPPEARED) {
         return true;
     }
     if (find_object_with_behavior(smlua_override_behavior(bhvActSelector)) != NULL) { return true; }
@@ -141,9 +144,16 @@ static void first_person_camera_update(void) {
     fpPos[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) + coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
     fpPos[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) + sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
     fpPos[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) + coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
-    fpFocus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
-    fpFocus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
-    fpFocus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
+    // Flatscreen flip cam: forward/back somersaults PITCH the look direction (triple jump / slide flip /
+    // backflip / rollouts); the side flip ROLLs the screen instead (set below). The camera stays at the
+    // head (fpPos keeps the plain pitch); only the view tilts. In VR the eye is rotated in vr.c instead,
+    // so skip it here or it would double up.
+    s16 flipAngle = vr_is_active() ? 0 : first_person_flip_roll(m);
+    bool flipSide = first_person_flip_is_side(m);
+    s16 lookPitch = gFirstPersonCamera.pitch + (flipSide ? 0 : flipAngle);
+    fpFocus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(lookPitch) * sins(gFirstPersonCamera.yaw);
+    fpFocus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(lookPitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
+    fpFocus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(lookPitch) * coss(gFirstPersonCamera.yaw);
 
     // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
     // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
@@ -181,13 +191,9 @@ static void first_person_camera_update(void) {
     vec3f_copy(gLakituState.curFocus, gLakituState.focus);
     vec3f_copy(gLakituState.goalFocus, gLakituState.focus);
 
-    // set other values
-    s16 flipRoll = first_person_flip_roll(m);
-    if (flipRoll != 0) {
-        gLakituState.roll = flipRoll; // flatscreen: 2D screen roll (VR uses vr_set_flip_roll, set in pc_main)
-    } else if (gFirstPersonCamera.forceRoll) {
-        gLakituState.roll = 0;
-    }
+    // set other values. Forward/back flips pitch the view (the focus above); the side flip rolls the
+    // screen here. Otherwise keep the roll level.
+    gLakituState.roll = flipSide ? flipAngle : 0;
     gLakituState.posHSpeed = 0;
     gLakituState.posVSpeed = 0;
     gLakituState.focHSpeed = 0;
@@ -262,18 +268,18 @@ void first_person_reset(void) {
 // FP Flip Cam toggle is on.
 s16 first_person_flip_roll(struct MarioState *m) {
     if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
-    // Drives a PITCH flip in VR (nose over tail), not a barrel roll. Sign tuned on the headset: forward
-    // somersaults pitch the view FORWARD (+1), back somersaults pitch BACK (-1). Triple jump + star/wing
-    // triple jumps + side ("slide") flip + forward rollout are forward; backflip + backward rollout back.
+    // Returns the flip angle for the current move. Callers route it to a PITCH (forward/back somersaults)
+    // or a ROLL (side flip, see first_person_flip_is_side). Pitch sign tuned on the headset: forward
+    // somersaults +1, back somersaults -1. Side flip is +1 here and gets rolled to the side by the caller.
     f32 dir;
     switch (m->action) {
-        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip
-        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward (star/cap triple jump)
-        case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward (wing cap triple jump)
-        case ACT_SIDE_FLIP:           dir =  1.0f; break; // "slide flip" -> forward
-        case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll
-        case ACT_BACKFLIP:            dir = -1.0f; break; // back flip
-        case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll
+        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip (pitch)
+        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward, star/cap triple jump (pitch)
+        case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward, wing cap triple jump (pitch)
+        case ACT_SIDE_FLIP:           dir =  1.0f; break; // side flip -> ROLL to the side (caller routes it)
+        case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll (pitch)
+        case ACT_BACKFLIP:            dir = -1.0f; break; // back flip (pitch)
+        case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll (pitch)
         default:                      return 0;
     }
     struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
@@ -290,4 +296,10 @@ s16 first_person_flip_roll(struct MarioState *m) {
 // map 0x8000 -> pi, so radians = angle * pi / 32768. Returns 0 when not flipping or the toggle is off.
 f32 first_person_flip_roll_rad(void) {
     return (f32)first_person_flip_roll(&gMarioStates[0]) * (3.14159265358979f / 32768.0f);
+}
+
+// A side flip rolls Mario sideways, so its camera should ROLL (tilt to the side) rather than pitch like
+// the forward/back somersaults. Callers route the flip angle to roll when this is true, pitch otherwise.
+bool first_person_flip_is_side(struct MarioState *m) {
+    return gFirstPersonCamera.flipCam && gFirstPersonCamera.enabled && m != NULL && m->action == ACT_SIDE_FLIP;
 }

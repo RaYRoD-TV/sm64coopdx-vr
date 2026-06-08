@@ -7,6 +7,7 @@
 #include "djui_selectionbox.h"
 #include "pc/vr/vr.h"
 #include "game/first_person_cam.h"
+#include "game/hud.h" // gMenuHideHud
 
 // VR mode dropdown choices (order matches the vr.c preset table: 0=Tabletop, 1=Close-up, 2=First-person).
 static char* sVrModeChoices[] = { "Tabletop", "Close-up", "First-person" };
@@ -22,6 +23,7 @@ static unsigned int sVrMode;    // VR mode index: 0=Tabletop, 1=Close-up, 2=Firs
 static bool sFlipCam;           // first person: roll the view with Mario's flip jumps
 static bool sInteractCam;       // first person: ease back to show Mario when interacting/attacking
 static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
+static bool sHideHud;           // hide the on-screen HUD (lives/stars/power meter)
 static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
 static unsigned int sDioDistI;  // diorama distance, hundredths offset by 2 m (0..300 = -2.0..1.0 m)
@@ -31,7 +33,7 @@ static unsigned int sStereoI;   // stereo depth, hundredths (0..200 = 0.0..2.0)
 static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 
 // Widget handles, so Reset to Default can refresh what's on screen.
-static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip;
+static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip, *cbHideHud;
 static struct DjuiSelectionbox *sbMode;
 static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 
@@ -48,6 +50,7 @@ static void vr_panel_seed_proxies(void) {
     sFlipCam    = gFirstPersonCamera.flipCam;
     sInteractCam = gFirstPersonCamera.interactCam;
     sAntiClip   = vr_anticlip_is_enabled();
+    sHideHud    = (gMenuHideHud != 0);
     sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
     sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
     sDioDistI   = clampu((vr_get_diorama_dist()   + 2.0f) * 100.0f, 0, 300);
@@ -64,6 +67,7 @@ static void vr_panel_refresh_widgets(void) {
     if (cbFlipCam)  { djui_base_set_visible(&cbFlipCam->rectValue->base,  sFlipCam); }
     if (cbInteractCam) { djui_base_set_visible(&cbInteractCam->rectValue->base, sInteractCam); }
     if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
+    if (cbHideHud)  { djui_base_set_visible(&cbHideHud->rectValue->base,  sHideHud); }
     if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
     if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
     if (slDioDist)   { djui_slider_update_value(&slDioDist->base); }
@@ -89,6 +93,7 @@ static void vr_panel_dio_height_changed(UNUSED struct DjuiBase* caller){ vr_set_
 static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
+static void vr_panel_hidehud_changed(UNUSED struct DjuiBase* caller)   { gMenuHideHud = sHideHud ? 1 : 0; }
 static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; }
 static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
     gFirstPersonCamera.flipCam = sFlipCam;
@@ -115,7 +120,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
     vr_panel_seed_proxies();
     // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
     // previous open must not be reused.
-    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
+    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = cbHideHud = NULL;
     sbMode = NULL;
     slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 
@@ -131,6 +136,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
         }
         cbFlipCam = djui_checkbox_create(body, "FP Flip Cam (intense)", &sFlipCam, vr_panel_flipcam_changed);
         cbInteractCam = djui_checkbox_create(body, "FP Ease-Back on Interact", &sInteractCam, vr_panel_interactcam_changed);
+        cbHideHud = djui_checkbox_create(body, "Hide HUD", &sHideHud, vr_panel_hidehud_changed);
 
         // The rest only matters with VR running, so hide it in plain flatscreen sessions.
         if (vr_is_requested()) {

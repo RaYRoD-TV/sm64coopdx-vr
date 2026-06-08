@@ -453,8 +453,10 @@ void produce_interpolation_frames_and_delay(void) {
             // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
             // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
             {
-                extern f32 first_person_flip_roll_rad(void); // game/first_person_cam.h
+                extern f32 first_person_flip_roll_rad(void);                  // game/first_person_cam.h
+                extern bool first_person_flip_is_side(struct MarioState *m);  // side flip rolls; others pitch
                 vr_set_flip_roll(first_person_flip_roll_rad());
+                vr_set_flip_side(first_person_flip_is_side(&gMarioStates[0]));
             }
             if (vr_frame_is_nongameplay()) {
                 // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,

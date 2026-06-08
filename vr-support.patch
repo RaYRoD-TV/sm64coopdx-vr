@@ -29,10 +29,10 @@ index 12e547a..37173b3 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 0000000..5b4f071
+index 0000000..b451951
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,35 @@
 +# Changelog
 +
 +## v0.2 - 2026-06-08
@@ -49,19 +49,21 @@ index 0000000..5b4f071
 +  world is in front of you no matter how you started.
 +- The menu panel sits at eye level instead of drifting toward the bottom.
 +- Mouse look no longer inverts itself when the headset takes or loses focus.
++- Added a Hide HUD toggle in the VR menu (works in flatscreen too).
 +
 +First person
-+- Flip cam now pitches the view with the actual flip (triple jump, star and
-+  wing triple jumps, side flip, rollouts), forward or back to match the move,
-+  and the motion is smoothed out.
++- Flip cam follows the actual flip in both flatscreen and VR: forward and back
++  somersaults (triple jump, slide flip, backflip, rollouts) pitch the view, and
++  the side flip rolls it to the side. Smoothed so it isn't choppy.
++- First person stays on while flying with the wing cap.
 +- Added ease-back: when you talk to something or attack, the camera pulls back
 +  to show Mario, then eases back into first person. He stays hidden otherwise
 +  and is solid, not see-through, while shown.
 +- Removed the old Show Body option. The ease-back replaces it.
 +
 +Input
-+- Gamepad no longer stops responding in menus, including the in-game pause menu.
-+  A stick push now reclaims the cursor if the mouse last had it.
++- Gamepad reliably captures menus now, including the in-game pause menu, even
++  when the mouse last had the cursor.
 +
 +Flatscreen
 +- Skybox covers the full screen again with no black bars, and stays anchored
@@ -520,10 +522,10 @@ index 5406e94..f7fa93d 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22..e458be0 100644
+index 4bfed22..8c24440 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
-@@ -9,6 +9,7 @@
+@@ -9,12 +9,14 @@
  #include "mario.h"
  #include "hardcoded.h"
  #include "save_file.h"
@@ -531,7 +533,14 @@ index 4bfed22..e458be0 100644
  
  #include "engine/math_util.h"
  
-@@ -24,6 +25,9 @@ struct FirstPersonCamera gFirstPersonCamera = {
+ #include "pc/controller/controller_mouse.h"
+ #include "pc/djui/djui.h"
+ #include "pc/djui/djui_hud_utils.h"
++#include "pc/vr/vr.h" // vr_is_active (flip cam pitches the eye in VR, the look here in flatscreen)
+ #include "pc/lua/utils/smlua_camera_utils.h"
+ #include "pc/lua/smlua_hooks.h"
+ 
+@@ -24,6 +26,9 @@ struct FirstPersonCamera gFirstPersonCamera = {
      .forceYaw = false,
      .forceRoll = true,
      .centerL = true,
@@ -541,7 +550,18 @@ index 4bfed22..e458be0 100644
      .pitch = 0,
      .yaw = 0,
      .crouch = 0,
-@@ -63,6 +67,12 @@ static void first_person_camera_update(void) {
+@@ -34,7 +39,9 @@ struct FirstPersonCamera gFirstPersonCamera = {
+ extern s16 gMenuMode;
+ 
+ bool first_person_check_cancels(struct MarioState *m) {
+-    if (m->action == ACT_FIRST_PERSON || m->action == ACT_IN_CANNON || m->action == ACT_READING_NPC_DIALOG || m->action == ACT_DISAPPEARED || m->action == ACT_FLYING) {
++    // Note: ACT_FLYING is intentionally NOT cancelled, so first-person stays on while flying (wing cap).
++    // The flying yaw/pitch is handled below in the per-action fix-up list.
++    if (m->action == ACT_FIRST_PERSON || m->action == ACT_IN_CANNON || m->action == ACT_READING_NPC_DIALOG || m->action == ACT_DISAPPEARED) {
+         return true;
+     }
+     if (find_object_with_behavior(smlua_override_behavior(bhvActSelector)) != NULL) { return true; }
+@@ -63,6 +70,12 @@ static void first_person_camera_update(void) {
      struct MarioState *m = &gMarioStates[0];
      f32 sensX = 0.3f * camera_config_get_x_sensitivity();
      f32 sensY = 0.4f * camera_config_get_y_sensitivity();
@@ -554,7 +574,7 @@ index 4bfed22..e458be0 100644
  
      if (mouse_relative_enabled) {
          // hack: make c buttons work for moving the camera
-@@ -77,7 +87,7 @@ static void first_person_camera_update(void) {
+@@ -77,7 +90,7 @@ static void first_person_camera_update(void) {
  
          // update pitch
          if (!gFirstPersonCamera.forcePitch) {
@@ -563,7 +583,7 @@ index 4bfed22..e458be0 100644
              gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
          }
  
-@@ -86,7 +96,7 @@ static void first_person_camera_update(void) {
+@@ -86,7 +99,7 @@ static void first_person_camera_update(void) {
              if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
                  gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
              } else {
@@ -572,7 +592,7 @@ index 4bfed22..e458be0 100644
              }
          }
      }
-@@ -126,24 +136,56 @@ static void first_person_camera_update(void) {
+@@ -126,26 +139,61 @@ static void first_person_camera_update(void) {
          gFirstPersonCamera.crouch = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT;
      }
  
@@ -585,9 +605,16 @@ index 4bfed22..e458be0 100644
 +    fpPos[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) + coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
 +    fpPos[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) + sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
 +    fpPos[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) + coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
-+    fpFocus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
-+    fpFocus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
-+    fpFocus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
++    // Flatscreen flip cam: forward/back somersaults PITCH the look direction (triple jump / slide flip /
++    // backflip / rollouts); the side flip ROLLs the screen instead (set below). The camera stays at the
++    // head (fpPos keeps the plain pitch); only the view tilts. In VR the eye is rotated in vr.c instead,
++    // so skip it here or it would double up.
++    s16 flipAngle = vr_is_active() ? 0 : first_person_flip_roll(m);
++    bool flipSide = first_person_flip_is_side(m);
++    s16 lookPitch = gFirstPersonCamera.pitch + (flipSide ? 0 : flipAngle);
++    fpFocus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(lookPitch) * sins(gFirstPersonCamera.yaw);
++    fpFocus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(lookPitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
++    fpFocus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(lookPitch) * coss(gFirstPersonCamera.yaw);
 +
 +    // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
 +    // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
@@ -630,16 +657,17 @@ index 4bfed22..e458be0 100644
      vec3f_copy(gLakituState.curFocus, gLakituState.focus);
      vec3f_copy(gLakituState.goalFocus, gLakituState.focus);
  
-     // set other values
+-    // set other values
 -    if (gFirstPersonCamera.forceRoll) {
-+    s16 flipRoll = first_person_flip_roll(m);
-+    if (flipRoll != 0) {
-+        gLakituState.roll = flipRoll; // flatscreen: 2D screen roll (VR uses vr_set_flip_roll, set in pc_main)
-+    } else if (gFirstPersonCamera.forceRoll) {
-         gLakituState.roll = 0;
-     }
+-        gLakituState.roll = 0;
+-    }
++    // set other values. Forward/back flips pitch the view (the focus above); the side flip rolls the
++    // screen here. Otherwise keep the roll level.
++    gLakituState.roll = flipSide ? flipAngle : 0;
      gLakituState.posHSpeed = 0;
-@@ -174,7 +216,15 @@ void first_person_update(void) {
+     gLakituState.posVSpeed = 0;
+     gLakituState.focHSpeed = 0;
+@@ -174,7 +222,15 @@ void first_person_update(void) {
              level_trigger_warp(m, WARP_OP_LOOK_UP);
          }
  
@@ -656,7 +684,7 @@ index 4bfed22..e458be0 100644
          if (m->heldObj) {
              Vec3f camDir = {
                  m->area->camera->focus[0] - m->area->camera->pos[0],
-@@ -193,6 +243,9 @@ void first_person_update(void) {
+@@ -193,6 +249,9 @@ void first_person_update(void) {
  void first_person_reset(void) {
      gFirstPersonCamera.forceRoll = false;
      gFirstPersonCamera.centerL = true;
@@ -666,7 +694,7 @@ index 4bfed22..e458be0 100644
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +254,40 @@ void first_person_reset(void) {
+@@ -201,3 +260,46 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -678,18 +706,18 @@ index 4bfed22..e458be0 100644
 +// FP Flip Cam toggle is on.
 +s16 first_person_flip_roll(struct MarioState *m) {
 +    if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
-+    // Drives a PITCH flip in VR (nose over tail), not a barrel roll. Sign tuned on the headset: forward
-+    // somersaults pitch the view FORWARD (+1), back somersaults pitch BACK (-1). Triple jump + star/wing
-+    // triple jumps + side ("slide") flip + forward rollout are forward; backflip + backward rollout back.
++    // Returns the flip angle for the current move. Callers route it to a PITCH (forward/back somersaults)
++    // or a ROLL (side flip, see first_person_flip_is_side). Pitch sign tuned on the headset: forward
++    // somersaults +1, back somersaults -1. Side flip is +1 here and gets rolled to the side by the caller.
 +    f32 dir;
 +    switch (m->action) {
-+        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip
-+        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward (star/cap triple jump)
-+        case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward (wing cap triple jump)
-+        case ACT_SIDE_FLIP:           dir =  1.0f; break; // "slide flip" -> forward
-+        case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll
-+        case ACT_BACKFLIP:            dir = -1.0f; break; // back flip
-+        case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll
++        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip (pitch)
++        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward, star/cap triple jump (pitch)
++        case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward, wing cap triple jump (pitch)
++        case ACT_SIDE_FLIP:           dir =  1.0f; break; // side flip -> ROLL to the side (caller routes it)
++        case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll (pitch)
++        case ACT_BACKFLIP:            dir = -1.0f; break; // back flip (pitch)
++        case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll (pitch)
 +        default:                      return 0;
 +    }
 +    struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
@@ -707,8 +735,14 @@ index 4bfed22..e458be0 100644
 +f32 first_person_flip_roll_rad(void) {
 +    return (f32)first_person_flip_roll(&gMarioStates[0]) * (3.14159265358979f / 32768.0f);
 +}
++
++// A side flip rolls Mario sideways, so its camera should ROLL (tilt to the side) rather than pitch like
++// the forward/back somersaults. Callers route the flip angle to roll when this is true, pitch otherwise.
++bool first_person_flip_is_side(struct MarioState *m) {
++    return gFirstPersonCamera.flipCam && gFirstPersonCamera.enabled && m != NULL && m->action == ACT_SIDE_FLIP;
++}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf..0cdbd9a 100644
+index 42bfeaf..3d3b9e4 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
 @@ -14,6 +14,9 @@ struct FirstPersonCamera {
@@ -721,7 +755,7 @@ index 42bfeaf..0cdbd9a 100644
      s16 pitch;
      s16 yaw;
      f32 crouch;
-@@ -35,4 +38,9 @@ void first_person_update(void);
+@@ -35,4 +38,11 @@ void first_person_update(void);
  /* |description|Resets first person|descriptionEnd| */
  void first_person_reset(void);
  
@@ -729,9 +763,44 @@ index 42bfeaf..0cdbd9a 100644
 +s16 first_person_flip_roll(struct MarioState *m);
 +/* |description|Local player's flip roll in radians for the VR eye view (0 when not flipping)|descriptionEnd| */
 +f32 first_person_flip_roll_rad(void);
++/* |description|True while a side flip is in progress (camera rolls to the side instead of pitching)|descriptionEnd| */
++bool first_person_flip_is_side(struct MarioState *m);
 +
  #endif // FIRST_PERSON_CAM_H
 \ No newline at end of file
+diff --git a/src/game/hud.c b/src/game/hud.c
+index 1e16413..4dd4fd2 100644
+--- a/src/game/hud.c
++++ b/src/game/hud.c
+@@ -27,6 +27,7 @@
+ 
+ extern bool gDjuiInMainMenu;
+ u8 gOverrideHideHud;
++u8 gMenuHideHud; // VR/options "Hide HUD" toggle (separate from the Lua/network-driven gOverrideHideHud)
+ 
+ /* @file hud.c
+  * This file implements HUD rendering and power meter animations.
+@@ -623,7 +624,7 @@ void render_hud(void) {
+         create_dl_ortho_matrix();
+ #endif
+ 
+-        bool showHud = (!gDjuiInMainMenu && !gOverrideHideHud);
++        bool showHud = (!gDjuiInMainMenu && !gOverrideHideHud && !gMenuHideHud);
+ 
+         if (gCurrentArea != NULL && gCurrentArea->camera != NULL && gCurrentArea->camera->mode == CAMERA_MODE_INSIDE_CANNON) {
+             render_hud_cannon_reticle();
+diff --git a/src/game/hud.h b/src/game/hud.h
+index e570313..b0e7385 100644
+--- a/src/game/hud.h
++++ b/src/game/hud.h
+@@ -26,6 +26,7 @@ enum CameraHUDLut {
+ };
+ 
+ extern u8 gOverrideHideHud;
++extern u8 gMenuHideHud;
+ 
+ void render_hud_icon(Vtx *vtx, const Texture *texture, u32 fmt, u32 siz, s32 texW, s32 texH, s32 x, s32 y, s32 w, s32 h, s32 tileX, s32 tileY, s32 tileW, s32 tileH);
+ 
 diff --git a/src/game/level_update.c b/src/game/level_update.c
 index 02b8216..57639a9 100644
 --- a/src/game/level_update.c
@@ -1118,10 +1187,24 @@ index 29f48ea..70c9b11 100644
      } else {
          controller_mouse_leave_relative();
 diff --git a/src/pc/djui/djui_cursor.c b/src/pc/djui/djui_cursor.c
-index f2c15c8..a609815 100644
+index f2c15c8..eb878b5 100644
 --- a/src/pc/djui/djui_cursor.c
 +++ b/src/pc/djui/djui_cursor.c
-@@ -135,6 +135,14 @@ static void djui_cursor_update_position(void) {
+@@ -53,6 +53,13 @@ static void djui_cursor_base_hover_location(struct DjuiBase* base, f32* x, f32*
+     base->get_cursor_hover_location(base, x, y);
+ }
+ 
++// Hand the cursor back to controller/input control. Called when a menu opens so the gamepad works
++// immediately, even if the mouse owned the cursor beforehand (you open the pause menu with the
++// controller, but the mouse last moved it - the stick was being zeroed and the menu felt unresponsive).
++void djui_cursor_clear_mouse_control(void) {
++    sCursorMouseControlled = false;
++}
++
+ void djui_cursor_input_controlled_center(struct DjuiBase* base) {
+     if (!sCursorMouseControlled && (!base || (base && base->interactable && base->interactable->enabled))) {
+         sInputControlledBase = base;
+@@ -135,6 +142,14 @@ static void djui_cursor_update_position(void) {
          sCursorMouseControlled = false;
          sSavedMouseX = mouse_window_x;
          sSavedMouseY = mouse_window_y;
@@ -1136,7 +1219,7 @@ index f2c15c8..a609815 100644
      } else if (!sCursorMouseControlled || (sMouseCursor && !sMouseCursor->base.visible)) {
          f32 dist = sqrtf(powf(mouse_window_x - sSavedMouseX, 2) + powf(mouse_window_y - sSavedMouseY, 2));
          if (dist > 5) {
-@@ -143,10 +151,24 @@ static void djui_cursor_update_position(void) {
+@@ -143,10 +158,24 @@ static void djui_cursor_update_position(void) {
          }
      }
  
@@ -1161,6 +1244,18 @@ index f2c15c8..a609815 100644
      } else if (sInputControlledBase != NULL) {
          djui_cursor_base_hover_location(sInputControlledBase, &gCursorX, &gCursorY);
      }
+diff --git a/src/pc/djui/djui_cursor.h b/src/pc/djui/djui_cursor.h
+index bc93740..f60de05 100644
+--- a/src/pc/djui/djui_cursor.h
++++ b/src/pc/djui/djui_cursor.h
+@@ -7,6 +7,7 @@ extern f32 gCursorY;
+ 
+ void djui_cursor_set_visible(bool visible);
+ bool djui_cursor_inside_base(struct DjuiBase* base);
++void djui_cursor_clear_mouse_control(void);
+ void djui_cursor_input_controlled_center(struct DjuiBase* base);
+ void djui_cursor_move(s8 xDir, s8 yDir);
+ void djui_cursor_interp(void);
 diff --git a/src/pc/djui/djui_interactable.c b/src/pc/djui/djui_interactable.c
 index 9eecd23..09baf14 100644
 --- a/src/pc/djui/djui_interactable.c
@@ -1178,7 +1273,7 @@ index 9eecd23..09baf14 100644
      } else if (abs(pad->stick_x) > abs(pad->stick_y)) {
          padHoldDirection = (pad->stick_x < 0) ? PAD_HOLD_DIR_LEFT : PAD_HOLD_DIR_RIGHT;
 diff --git a/src/pc/djui/djui_panel.c b/src/pc/djui/djui_panel.c
-index b25a251..f67b93d 100644
+index b25a251..4d7751f 100644
 --- a/src/pc/djui/djui_panel.c
 +++ b/src/pc/djui/djui_panel.c
 @@ -19,6 +19,13 @@ bool djui_panel_is_active(void) {
@@ -1195,17 +1290,20 @@ index b25a251..f67b93d 100644
  static struct DjuiBase* djui_panel_find_first_interactable(struct DjuiBaseChild* child) {
      while (child) {
          if (child->base->interactable && child->base->interactable->enabled) {
-@@ -85,6 +92,9 @@ struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel*
+@@ -85,6 +92,12 @@ struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel*
      sMoveAmount = 0;
  
      if (firstPanel) {
 +        // A menu just opened: route the controller to the menu pad. Tied to panel-list lifecycle here
 +        // (not per-creator) so it can't drift off as you navigate sub-panels.
 +        gInteractableOverridePad = true;
++        // Default the cursor to controller control on open, so the gamepad captures the menu (e.g. the
++        // pause menu) immediately instead of staying stuck on the mouse. The mouse takes over on any move.
++        djui_cursor_clear_mouse_control();
          djui_base_set_location(panelBase, 0, 0);
          djui_cursor_input_controlled_center(panel->defaultElementBase);
          djui_base_set_enabled(panel->base, true);
-@@ -138,6 +148,10 @@ void djui_panel_back(void) {
+@@ -138,6 +151,10 @@ void djui_panel_back(void) {
  
  void djui_panel_update(void) {
      if (sPanelList == NULL) { return; }
@@ -1314,10 +1412,10 @@ index 6a4c2ef..b772b91 100644
          if (gNetworkType == NT_SERVER) {
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
-index 0000000..d8f9002
+index 0000000..a8ece26
 --- /dev/null
 +++ b/src/pc/djui/djui_panel_vr.c
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,158 @@
 +#include "djui.h"
 +#include "djui_panel.h"
 +#include "djui_panel_menu.h"
@@ -1327,6 +1425,7 @@ index 0000000..d8f9002
 +#include "djui_selectionbox.h"
 +#include "pc/vr/vr.h"
 +#include "game/first_person_cam.h"
++#include "game/hud.h" // gMenuHideHud
 +
 +// VR mode dropdown choices (order matches the vr.c preset table: 0=Tabletop, 1=Close-up, 2=First-person).
 +static char* sVrModeChoices[] = { "Tabletop", "Close-up", "First-person" };
@@ -1342,6 +1441,7 @@ index 0000000..d8f9002
 +static bool sFlipCam;           // first person: roll the view with Mario's flip jumps
 +static bool sInteractCam;       // first person: ease back to show Mario when interacting/attacking
 +static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
++static bool sHideHud;           // hide the on-screen HUD (lives/stars/power meter)
 +static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 +static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
 +static unsigned int sDioDistI;  // diorama distance, hundredths offset by 2 m (0..300 = -2.0..1.0 m)
@@ -1351,7 +1451,7 @@ index 0000000..d8f9002
 +static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 +
 +// Widget handles, so Reset to Default can refresh what's on screen.
-+static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip;
++static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip, *cbHideHud;
 +static struct DjuiSelectionbox *sbMode;
 +static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 +
@@ -1368,6 +1468,7 @@ index 0000000..d8f9002
 +    sFlipCam    = gFirstPersonCamera.flipCam;
 +    sInteractCam = gFirstPersonCamera.interactCam;
 +    sAntiClip   = vr_anticlip_is_enabled();
++    sHideHud    = (gMenuHideHud != 0);
 +    sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
 +    sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
 +    sDioDistI   = clampu((vr_get_diorama_dist()   + 2.0f) * 100.0f, 0, 300);
@@ -1384,6 +1485,7 @@ index 0000000..d8f9002
 +    if (cbFlipCam)  { djui_base_set_visible(&cbFlipCam->rectValue->base,  sFlipCam); }
 +    if (cbInteractCam) { djui_base_set_visible(&cbInteractCam->rectValue->base, sInteractCam); }
 +    if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
++    if (cbHideHud)  { djui_base_set_visible(&cbHideHud->rectValue->base,  sHideHud); }
 +    if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
 +    if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
 +    if (slDioDist)   { djui_slider_update_value(&slDioDist->base); }
@@ -1409,6 +1511,7 @@ index 0000000..d8f9002
 +static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 +static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 +static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
++static void vr_panel_hidehud_changed(UNUSED struct DjuiBase* caller)   { gMenuHideHud = sHideHud ? 1 : 0; }
 +static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; }
 +static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
 +    gFirstPersonCamera.flipCam = sFlipCam;
@@ -1435,7 +1538,7 @@ index 0000000..d8f9002
 +    vr_panel_seed_proxies();
 +    // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
 +    // previous open must not be reused.
-+    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
++    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = cbHideHud = NULL;
 +    sbMode = NULL;
 +    slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 +
@@ -1451,6 +1554,7 @@ index 0000000..d8f9002
 +        }
 +        cbFlipCam = djui_checkbox_create(body, "FP Flip Cam (intense)", &sFlipCam, vr_panel_flipcam_changed);
 +        cbInteractCam = djui_checkbox_create(body, "FP Ease-Back on Interact", &sInteractCam, vr_panel_interactcam_changed);
++        cbHideHud = djui_checkbox_create(body, "Hide HUD", &sHideHud, vr_panel_hidehud_changed);
 +
 +        // The rest only matters with VR running, so hide it in plain flatscreen sessions.
 +        if (vr_is_requested()) {
@@ -1842,7 +1946,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..02a7904 100644
+index 0d4f9f7..68a9087 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -2011,7 +2115,7 @@ index 0d4f9f7..02a7904 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +421,86 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +421,88 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -2047,8 +2151,10 @@ index 0d4f9f7..02a7904 100644
 +            // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
 +            // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
 +            {
-+                extern f32 first_person_flip_roll_rad(void); // game/first_person_cam.h
++                extern f32 first_person_flip_roll_rad(void);                  // game/first_person_cam.h
++                extern bool first_person_flip_is_side(struct MarioState *m);  // side flip rolls; others pitch
 +                vr_set_flip_roll(first_person_flip_roll_rad());
++                vr_set_flip_side(first_person_flip_is_side(&gMarioStates[0]));
 +            }
 +            if (vr_frame_is_nongameplay()) {
 +                // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
@@ -2098,7 +2204,7 @@ index 0d4f9f7..02a7904 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +659,7 @@ void game_deinit(void) {
+@@ -452,6 +661,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -2106,7 +2212,7 @@ index 0d4f9f7..02a7904 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +712,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +714,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -2124,10 +2230,10 @@ index 0d4f9f7..02a7904 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..34c7838
+index 0000000..f7ef160
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,1098 @@
+@@ -0,0 +1,1110 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -2235,6 +2341,7 @@ index 0000000..34c7838
 +
 +// First-person flip cam: roll (radians) applied to the eye view so the headset follows Mario's flips.
 +static float sFlipRollRad        = 0.0f;
++static bool  sFlipIsSide         = false; // flip cam: true = side flip (roll about forward), false = pitch
 +
 +// Sky: a world-anchored cylinder that wraps around you (falls back to a flat quad
 +// if the cylinder layer isn't supported). HUD/menu panel: head-locked, near.
@@ -2443,19 +2550,27 @@ index 0000000..34c7838
 +    fov.angleDown = -aV; fov.angleUp = aV;
 +    sRenderFov[eye] = fov;
 +
-+    // PITCH the view about the eye's right axis (eye-space X). First-person uses the animated flip
-+    // (sFlipRollRad) so the headset follows Mario's somersaults nose over tail. Diorama/close-up uses a
-+    // constant nose-DOWN tilt (sDioramaPitchRad, per-preset) so the shrunk world sits below your gaze
-+    // like a model on a table. Built once; reused for the eye and the sky dome so they stay locked.
-+    float pitchRad = sFirstPerson ? sFlipRollRad : -sDioramaPitchRad;
-+    bool  doFlipRoll = (pitchRad != 0.0f);
++    // Rotate the eye view for the flip cam / diorama tilt. First-person: forward/back somersaults PITCH
++    // about eye-space X (sFlipRollRad), the side flip ROLLs about eye-space Z, the forward axis
++    // (sFlipIsSide picks which). Diorama/close-up: a constant nose-DOWN pitch (sDioramaPitchRad) so the
++    // shrunk world sits below your gaze. Built once; reused for the eye and sky dome so they stay locked.
++    float pitchRad = 0.0f, rollRad = 0.0f;
++    if (sFirstPerson) {
++        if (sFlipIsSide) { rollRad = sFlipRollRad; } else { pitchRad = sFlipRollRad; }
++    } else {
++        pitchRad = -sDioramaPitchRad;
++    }
++    bool  doFlipRoll = (pitchRad != 0.0f || rollRad != 0.0f);
 +    float flipRx[4][4] = {{0}};
-+    if (doFlipRoll) {
++    flipRx[0][0] = flipRx[1][1] = flipRx[2][2] = flipRx[3][3] = 1.0f; // identity base
++    if (pitchRad != 0.0f) {                 // pitch about X (forward/back flip, diorama tilt)
 +        float cp = cosf(pitchRad), sp = sinf(pitchRad);
-+        flipRx[0][0] = 1.0f; flipRx[0][1] = 0.0f; flipRx[0][2] = 0.0f; flipRx[0][3] = 0.0f;
-+        flipRx[1][0] = 0.0f; flipRx[1][1] = cp;   flipRx[1][2] = sp;   flipRx[1][3] = 0.0f;
-+        flipRx[2][0] = 0.0f; flipRx[2][1] = -sp;  flipRx[2][2] = cp;   flipRx[2][3] = 0.0f;
-+        flipRx[3][0] = 0.0f; flipRx[3][1] = 0.0f; flipRx[3][2] = 0.0f; flipRx[3][3] = 1.0f;
++        flipRx[1][1] = cp;  flipRx[1][2] = sp;
++        flipRx[2][1] = -sp; flipRx[2][2] = cp;
++    } else if (rollRad != 0.0f) {           // roll about Z = forward (side flip)
++        float cr = cosf(rollRad), sr = sinf(rollRad);
++        flipRx[0][0] = cr;  flipRx[0][1] = sr;
++        flipRx[1][0] = -sr; flipRx[1][1] = cr;
 +    }
 +
 +    float V[4][4], P[4][4], AV[4][4];
@@ -2886,6 +3001,8 @@ index 0000000..34c7838
 +    sFlipRollRad += (radians - sFlipRollRad) * 0.22f;
 +    if (fabsf(radians - sFlipRollRad) < 0.0008f) { sFlipRollRad = radians; }
 +}
++// Pick the flip axis: true = side flip (roll about the forward axis), false = forward/back flip (pitch).
++void  vr_set_flip_side(bool side) { sFlipIsSide = side; }
 +
 +// The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
 +// is tuned from the in-game Options -> VR menu.
@@ -3210,6 +3327,7 @@ index 0000000..34c7838
 +bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
 +void  vr_anticlip_set_offset(const float m[3]) { (void)m; }
 +void  vr_set_flip_roll(float radians) { (void)radians; }
++void  vr_set_flip_side(bool side) { (void)side; }
 +int   vr_eye_count(void)     { return 0; }
 +int   vr_eye_width(int e)    { (void)e; return 0; }
 +int   vr_eye_height(int e)   { (void)e; return 0; }
@@ -3228,10 +3346,10 @@ index 0000000..34c7838
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..f5721ac
+index 0000000..c0621fc
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,86 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -3278,6 +3396,7 @@ index 0000000..f5721ac
 +// First-person flip cam: roll the eye view by this angle (radians) so the headset follows Mario's
 +// flip jumps. Set each frame from pc_main; 0 = upright. Only applied in first-person mode.
 +void  vr_set_flip_roll(float radians);
++void  vr_set_flip_side(bool side); // flip cam axis: true = side flip (roll), false = forward/back (pitch)
 +
 +// Per frame: lazy-boot OpenXR, poll events, xrWaitFrame/xrBeginFrame, locate the
 +// per-eye views. Call once before the eye loop.
