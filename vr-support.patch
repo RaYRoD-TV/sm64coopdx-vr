@@ -50,10 +50,10 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..5e6a453 100644
+index 16ae934..5beb01a 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,70 @@
+@@ -1,22 +1,78 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
@@ -93,10 +93,18 @@ index 16ae934..5e6a453 100644
  
 -## Wiki
 -The wiki is made using GitHub's wiki feature, you can go to the wiki tab or click [here](https://github.com/coop-deluxe/sm64coopdx/wiki).
-+## Controls
++## Playing solo (offline)
  
 -## Community
 -We have an official Discord server open to the public [here](https://discord.gg/TJVKHS4).
++There's no separate single-player button. The menu only shows Host and Join because this is built on
++sm64coopdx. To just play on your own: click **Host**, leave Network System on **Direct Connection**
++(the default), then click **Host** at the bottom. That drops you straight into a normal local game you
++play by yourself, fully offline. Nobody can join unless you hand out your IP, so you can ignore the port
++and server fields.
++
++## Controls
++
 +You play with the same input sm64coopdx normally uses:
 +
 +- Gamepad: DualSense (PS5), DualShock 4 (PS4), Xbox, Switch Pro, or any other SDL-compatible
@@ -274,10 +282,10 @@ index 0000000..7625268
 +pause
 diff --git a/make_vr_dist.bat b/make_vr_dist.bat
 new file mode 100644
-index 0000000..5d4873d
+index 0000000..f1f8946
 --- /dev/null
 +++ b/make_vr_dist.bat
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,86 @@
 +@echo off
 +title Package sm64coopdx VR (complete download)
 +REM ===========================================================================
@@ -338,6 +346,11 @@ index 0000000..5d4873d
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo That is it. Headset connected = VR automatically; no headset = normal flat
 +>>"%DIST%\READ_ME_FIRST.txt" echo game. Force it either way with  --vr  or  --novr .
++>>"%DIST%\READ_ME_FIRST.txt" echo.
++>>"%DIST%\READ_ME_FIRST.txt" echo PLAYING SOLO (offline): there is no single-player button - the menu only shows
++>>"%DIST%\READ_ME_FIRST.txt" echo Host and Join because this is built on sm64coopdx. Just click Host, leave
++>>"%DIST%\READ_ME_FIRST.txt" echo Network System on Direct Connection (the default), then click Host at the
++>>"%DIST%\READ_ME_FIRST.txt" echo bottom. That starts a normal game you play by yourself, fully offline.
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
 +>>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are

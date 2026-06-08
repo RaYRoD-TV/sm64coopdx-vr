@@ -26,6 +26,14 @@ Already have sm64coopdx installed? You can skip the unzip step and just copy the
 DLLs from the release (libopenxr_loader.dll and the libgcc/libstdc++/libwinpthread ones next to it)
 into your existing folder.
 
+## Playing solo (offline)
+
+There's no separate single-player button. The menu only shows Host and Join because this is built on
+sm64coopdx. To just play on your own: click **Host**, leave Network System on **Direct Connection**
+(the default), then click **Host** at the bottom. That drops you straight into a normal local game you
+play by yourself, fully offline. Nobody can join unless you hand out your IP, so you can ignore the port
+and server fields.
+
 ## Controls
 
 You play with the same input sm64coopdx normally uses:
