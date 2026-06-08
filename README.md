@@ -4,7 +4,7 @@ Super Mario 64 in VR, built on the sm64coopdx PC port. With a headset on, the ga
 With no headset it just runs as the normal flatscreen game. Same exe, it works out which one you
 want on its own.
 
-Tested on Quest 3 and Pimax, but it should run with any PCVR / OpenXR runtime.
+Tested on Quest 3 and Pimax Dream Air, but it should run with any PCVR / OpenXR runtime.
 
 You bring your own Super Mario 64 US ROM. There's nothing from Nintendo in this repo, just code.
 coopdx reads the rom locally when the game starts, same as normal sm64coopdx, and it never leaves
