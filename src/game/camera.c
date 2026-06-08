@@ -9580,7 +9580,12 @@ BAD_RETURN(s32) cutscene_read_message_start(struct Camera *c) {
 
     sCutsceneVars[1].angle[0] = sCUpCameraPitch;
     sCutsceneVars[1].angle[1] = sModeOffsetYaw;
-    sCUpCameraPitch = -0x830;
+    // VR close-up keeps the dialog in the diorama view with the text as a head-locked overlay, so DON'T
+    // pitch the camera down into Mario's face (it pulls the miniature view in too far). Flatscreen,
+    // first-person and tabletop keep the normal dialog zoom.
+    if (!vr_is_active() || vr_first_person_active() || vr_is_tabletop_mode()) {
+        sCUpCameraPitch = -0x830;
+    }
     sModeOffsetYaw = 0;
     sCutsceneVars[0].angle[0] = 0;
 }

@@ -35,6 +35,7 @@
 #include "game/rumble_init.h"
 #include "game/level_update.h"  // sCurrPlayMode, PLAY_MODE_*, gCurrCreditsEntry, gVrInActSelector
 #include "game/ingame_menu.h"   // gMenuMode, get_dialog_id
+#include "game/area.h"          // gWarpTransition.isActive - door/level transition active
 #include "dialog_ids.h"         // DIALOG_NONE
 #include "game/camera.h"               // gCamera (->mtx is the renderer's world->camera matrix)
 #include "engine/surface_collision.h"  // find_floor / find_ceil / find_wall_collisions
@@ -284,6 +285,10 @@ static bool vr_frame_is_nongameplay(void) {
     // The VR settings menu stays in the stereo diorama (menu floats as a head-locked overlay) so you can see
     // diorama slider changes live - overrides the pause/panel checks below, which would force the flat panel.
     if (djui_panel_is_vr_panel())          return false;
+    // A door / level transition (the fade / circle / star wipe) is a 2D fullscreen effect. In the stereo
+    // path it lands in the small head-locked HUD overlay and only covers part of the view, so for its
+    // duration render the flat panel instead, which makes the transition fill the whole view.
+    if (gWarpTransition.isActive)          return true;
     if (gDjuiInMainMenu)                   return true; // title / main menu / connect / options (3D backdrop)
     if (djui_panel_is_active())            return true; // in-game menus: Player, DynOS, pause, options, etc.
     if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)

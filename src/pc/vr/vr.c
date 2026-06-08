@@ -139,6 +139,7 @@ static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; 
 // stick still moves and turns Mario like the flat game. Selected via the "First-person" preset (F10) or
 // the in-game VR menu.
 static bool sFirstPerson = false;
+static float sWorldScale = 1.0f; // first-person World Scale (>1 = world feels bigger); diorama/close-up ignore it
 
 // Menu panel: ALWAYS world-locked so you can turn your head to look around any menu (title + in-game).
 // sPanelFullFrame only chooses the crop/shape: in-game menus (Player/DynOS lists run to the edges) show
@@ -299,6 +300,10 @@ static void vr_build_eye_matrix(int eye) {
 
     float A[4][4] = {{0}};
     float invS = 1.0f / sDioramaScale;
+    // First-person World Scale: magnify the world in the eye transform so a bigger scale makes the world
+    // feel bigger (you feel smaller). Head motion stays 1:1 (no sickness) and the stereo scales with it,
+    // because A scales the whole eye view. Diorama/close-up are untouched (sFirstPerson is false there).
+    if (sFirstPerson) { invS *= sWorldScale; }
     A[0][0] = invS; A[1][1] = invS; A[2][2] = invS; A[3][3] = 1.0f;
     A[3][0] = sAnticlipOffsetM[0];
     A[3][1] = sDioramaHeight + sAnticlipOffsetM[1];
@@ -317,7 +322,7 @@ static void vr_build_eye_matrix(int eye) {
 
     // Clip planes adapt to the world scale so a big/life-size world isn't
     // far-clipped to black. SM64 geometry spans ~±8000 units.
-    float worldHalfM = 8000.0f / sDioramaScale;
+    float worldHalfM = 8000.0f * invS; // tracks invS (incl. first-person World Scale) so a bigger world isn't far-clipped
     float zn = 0.02f;
     float zf = (sDioramaDist > 0.0f ? sDioramaDist : 0.0f) + worldHalfM * 3.0f + 5.0f;
 
@@ -744,6 +749,8 @@ float vr_get_head_scale(void)        { return sHeadScale; }
 void  vr_set_head_scale(float v)     { sHeadScale = (v < 0.0f) ? 0.0f : (v > 1.5f ? 1.5f : v); vr_settings_mark_dirty(); }
 float vr_get_hud_size(void)          { return sHudSize; }
 void  vr_set_hud_size(float v)       { sHudSize = (v < 0.5f) ? 0.5f : v; vr_settings_mark_dirty(); } // VR HUD panel width (m)
+float vr_get_world_scale(void)       { return sWorldScale; }
+void  vr_set_world_scale(float v)    { sWorldScale = (v < 0.25f) ? 0.25f : (v > 4.0f ? 4.0f : v); vr_settings_mark_dirty(); } // first-person world scale
 // Tabletop is preset 0 - the model-on-a-table view that uses the free orbit camera (see camera.c).
 bool  vr_is_tabletop_mode(void)      { return sRunning && sCurrentPreset == 0; }
 
@@ -774,6 +781,7 @@ void vr_reset_defaults(void) {
     sPanelEyeYValid = false;  // re-lock the menu eye height
     sYawRecenterSet = false;  // re-center the view yaw on the next tracked pose
     sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
+    sWorldScale = 1.0f;
     printf("[VR] reset to defaults.\n");
     vr_settings_mark_dirty();
 }
@@ -788,9 +796,9 @@ static void vr_settings_save(void) {
     if (!f) { return; }
     fprintf(f,
         "preset=%d\nscale=%.3f\ndist=%.4f\nheight=%.4f\nstereo=%.4f\nhead=%.4f\n"
-        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\n",
+        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nworldscale=%.3f\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\n",
         sCurrentPreset, sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, sHeadScale,
-        sMenuDist, sMenuSize, sHudSize, sAnticlipEnabled ? 1 : 0,
+        sMenuDist, sMenuSize, sHudSize, sWorldScale, sAnticlipEnabled ? 1 : 0,
         first_person_get_flip_cam() ? 1 : 0, first_person_get_interact_cam() ? 1 : 0,
         gMenuHideHud ? 1 : 0);
     fclose(f);
@@ -820,6 +828,7 @@ static void vr_settings_load(void) {
         else if (!strcmp(key, "menudist"))    { sMenuDist      = (float)val; }
         else if (!strcmp(key, "menusize"))    { sMenuSize      = (float)val; }
         else if (!strcmp(key, "hudsize"))     { sHudSize       = (float)val; }
+        else if (!strcmp(key, "worldscale"))  { sWorldScale    = (float)val; }
         else if (!strcmp(key, "anticlip"))    { anticlip       = (int)val; }
         else if (!strcmp(key, "flipcam"))     { flip           = (int)val; }
         else if (!strcmp(key, "interactcam")) { interact       = (int)val; }
@@ -1193,6 +1202,7 @@ float vr_get_diorama_height(void)    { return 0.0f; } void vr_set_diorama_height
 float vr_get_head_scale(void)        { return 0.0f; } void vr_set_head_scale(float v)    { (void)v; }
 int   vr_get_refresh_rate(void)      { return 0; }
 float vr_get_hud_size(void)          { return 0.0f; } void vr_set_hud_size(float v) { (void)v; }
+float vr_get_world_scale(void)       { return 1.0f; } void vr_set_world_scale(float v) { (void)v; }
 bool  vr_is_tabletop_mode(void)      { return false; }
 void  vr_reset_defaults(void) {}
 void  vr_settings_mark_dirty(void) {}

@@ -31,12 +31,13 @@ static unsigned int sDioDistI;  // diorama distance, hundredths offset by 2 m (0
 static unsigned int sDioSizeI;  // diorama scale, game units per meter (bigger = smaller world)
 static unsigned int sDioHeightI;// diorama height, hundredths offset by 1 m (0..200 = -1.0..1.0 m)
 static unsigned int sStereoI;   // stereo depth, hundredths (0..200 = 0.0..2.0)
+static unsigned int sWorldScaleI; // first-person world scale, hundredths (25..400 = 0.25..4.0; bigger = bigger world)
 static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 
 // Widget handles, so Reset to Default can refresh what's on screen.
 static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip, *cbHideHud;
 static struct DjuiSelectionbox *sbMode;
-static struct DjuiSlider   *slMenuDist, *slMenuSize, *slHudSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
+static struct DjuiSlider   *slMenuDist, *slMenuSize, *slHudSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slWorldScale, *slHead;
 
 static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
     if (v < (float)lo) { return lo; }
@@ -59,6 +60,7 @@ static void vr_panel_seed_proxies(void) {
     sDioSizeI   = clampu(vr_get_diorama_scale(),                   30, 3000);
     sDioHeightI = clampu((vr_get_diorama_height() + 1.0f) * 100.0f, 0, 200);
     sStereoI    = clampu(vr_get_stereo()       * 100.0f,            0, 200);
+    sWorldScaleI = clampu(vr_get_world_scale() * 100.0f,            25, 400);
     sHeadI      = clampu(vr_get_head_scale()   * 100.0f,            0, 150);
 }
 
@@ -77,6 +79,7 @@ static void vr_panel_refresh_widgets(void) {
     if (slDioSize)   { djui_slider_update_value(&slDioSize->base); }
     if (slDioHeight) { djui_slider_update_value(&slDioHeight->base); }
     if (slStereo)    { djui_slider_update_value(&slStereo->base); }
+    if (slWorldScale){ djui_slider_update_value(&slWorldScale->base); }
     if (slHead)      { djui_slider_update_value(&slHead->base); }
 }
 
@@ -95,6 +98,7 @@ static void vr_panel_dio_dist_changed(UNUSED struct DjuiBase* caller)  { vr_set_
 static void vr_panel_dio_size_changed(UNUSED struct DjuiBase* caller)  { vr_set_diorama_scale((float)sDioSizeI); }
 static void vr_panel_dio_height_changed(UNUSED struct DjuiBase* caller){ vr_set_diorama_height((float)sDioHeightI / 100.0f - 1.0f); }
 static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
+static void vr_panel_world_scale_changed(UNUSED struct DjuiBase* caller) { vr_set_world_scale((float)sWorldScaleI / 100.0f); }
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
 static void vr_panel_hidehud_changed(UNUSED struct DjuiBase* caller)   { gMenuHideHud = sHideHud ? 1 : 0; vr_settings_mark_dirty(); }
@@ -127,7 +131,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
     // previous open must not be reused.
     cbFp = cbFlipCam = cbInteractCam = cbAntiClip = cbHideHud = NULL;
     sbMode = NULL;
-    slMenuDist = slMenuSize = slHudSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
+    slMenuDist = slMenuSize = slHudSize = slDioDist = slDioSize = slDioHeight = slStereo = slWorldScale = slHead = NULL;
 
     struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
     panel->base.tag = DJUI_PANEL_TAG_VR; // so VR keeps the live stereo diorama under this menu (not the flat panel)
@@ -153,6 +157,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
             slDioSize   = djui_slider_create(body, "Diorama Size",     &sDioSizeI,   30, 3000, vr_panel_dio_size_changed);
             slDioHeight = djui_slider_create(body, "Diorama Height",   &sDioHeightI, 0,  200,  vr_panel_dio_height_changed);
             slStereo    = djui_slider_create(body, "Stereo Depth",     &sStereoI,    0,  200,  vr_panel_stereo_changed);
+            slWorldScale = djui_slider_create(body, "World Scale (FP)", &sWorldScaleI, 25, 400, vr_panel_world_scale_changed);
             slHead      = djui_slider_create(body, "Head Motion",      &sHeadI,      0,  150,  vr_panel_head_changed);
             cbAntiClip  = djui_checkbox_create(body, "Camera Anti-Clip", &sAntiClip, vr_panel_anticlip_changed);
         }

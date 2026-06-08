@@ -13,10 +13,16 @@ VR
 - VR settings are now remembered between launches: mode, distances, sizes,
   stereo depth, head motion, HUD size, anti-clip, and the first-person toggles.
 - Added a HUD Size slider to scale the in-headset HUD.
+- Added a World Scale slider for first person: it changes how big the world feels
+  on foot. Default is unchanged, and it only affects first person.
 - Frames are now paced by the headset itself instead of the desktop monitor's
   refresh, which helps smoothness when the two run at different rates.
 - Close-up mode no longer dips the camera through the floor on quick camera
   moves.
+- Door and level transitions (the fade and wipe) now fill the whole view instead
+  of showing in a small panel.
+- Talking to a character in close-up no longer zooms the view in too far. The
+  diorama framing holds while the text shows.
 
 First person
 - The flip cam now rolls the side flip toward the side it actually flips, and
