@@ -667,9 +667,10 @@ static void vr_write_tune_file(void) {
 // and renders life-size at 1:1 instead of the shrunk diorama. F10 cycles Diorama / Close-up / First-person.
 typedef struct { const char *name; float scale, dist, height, stereo, pitch; bool firstPerson; } VrPreset;
 static const VrPreset sPresets[] = {
-    // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax, and a
-    // ~13 deg nose-down tilt so you look DOWN at it like a model on a table.
-    { "Tabletop",     3000.0f,  0.25f, -0.35f, 0.45f, 0.22f, false },
+    // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax. The
+    // nose-down tilt is kept small (~4.5 deg): it's applied in eye space, so a larger tilt leaks into a
+    // roll when you tilt your head (the "lopsided" look). The low + close framing carries the look-down.
+    { "Tabletop",     3000.0f,  0.25f, -0.35f, 0.45f, 0.08f, false },
     { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false },
     { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, 0.00f, true  }, // life-size, eye at Mario's head, full 6DoF
 };

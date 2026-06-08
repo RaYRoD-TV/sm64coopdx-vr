@@ -1842,7 +1842,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..7b7cc1c 100644
+index 0d4f9f7..02a7904 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -2011,7 +2011,7 @@ index 0d4f9f7..7b7cc1c 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +421,83 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +421,86 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -2037,9 +2037,12 @@ index 0d4f9f7..7b7cc1c 100644
 +            {
 +                extern struct Controller *gPlayer1Controller; // game/game_init.h
 +                extern bool djui_panel_is_active(void);        // pc/djui/djui_panel.h
-+                if (gPlayer1Controller && (gPlayer1Controller->buttonPressed & U_JPAD) && !djui_panel_is_active()) {
-+                    vr_cycle_preset();
-+                }
++                // Edge-detect off buttonDown (held state) rather than buttonPressed: buttonPressed is true
++                // for a single game-logic frame and the VR loop can miss it, so the cycle dropped inputs.
++                static u16 sPrevDpadUp = 0;
++                u16 dpadUp = gPlayer1Controller ? (u16)(gPlayer1Controller->buttonDown & U_JPAD) : 0;
++                if (dpadUp && !sPrevDpadUp && !djui_panel_is_active()) { vr_cycle_preset(); }
++                sPrevDpadUp = dpadUp;
 +            }
 +            // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
 +            // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
@@ -2095,7 +2098,7 @@ index 0d4f9f7..7b7cc1c 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +656,7 @@ void game_deinit(void) {
+@@ -452,6 +659,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -2103,7 +2106,7 @@ index 0d4f9f7..7b7cc1c 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +709,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +712,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -2121,10 +2124,10 @@ index 0d4f9f7..7b7cc1c 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..9def8cf
+index 0000000..34c7838
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,1097 @@
+@@ -0,0 +1,1098 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -2794,9 +2797,10 @@ index 0000000..9def8cf
 +// and renders life-size at 1:1 instead of the shrunk diorama. F10 cycles Diorama / Close-up / First-person.
 +typedef struct { const char *name; float scale, dist, height, stereo, pitch; bool firstPerson; } VrPreset;
 +static const VrPreset sPresets[] = {
-+    // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax, and a
-+    // ~13 deg nose-down tilt so you look DOWN at it like a model on a table.
-+    { "Tabletop",     3000.0f,  0.25f, -0.35f, 0.45f, 0.22f, false },
++    // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax. The
++    // nose-down tilt is kept small (~4.5 deg): it's applied in eye space, so a larger tilt leaks into a
++    // roll when you tilt your head (the "lopsided" look). The low + close framing carries the look-down.
++    { "Tabletop",     3000.0f,  0.25f, -0.35f, 0.45f, 0.08f, false },
 +    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false },
 +    { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, 0.00f, true  }, // life-size, eye at Mario's head, full 6DoF
 +};

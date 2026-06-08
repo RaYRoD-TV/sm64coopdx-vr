@@ -443,9 +443,12 @@ void produce_interpolation_frames_and_delay(void) {
             {
                 extern struct Controller *gPlayer1Controller; // game/game_init.h
                 extern bool djui_panel_is_active(void);        // pc/djui/djui_panel.h
-                if (gPlayer1Controller && (gPlayer1Controller->buttonPressed & U_JPAD) && !djui_panel_is_active()) {
-                    vr_cycle_preset();
-                }
+                // Edge-detect off buttonDown (held state) rather than buttonPressed: buttonPressed is true
+                // for a single game-logic frame and the VR loop can miss it, so the cycle dropped inputs.
+                static u16 sPrevDpadUp = 0;
+                u16 dpadUp = gPlayer1Controller ? (u16)(gPlayer1Controller->buttonDown & U_JPAD) : 0;
+                if (dpadUp && !sPrevDpadUp && !djui_panel_is_active()) { vr_cycle_preset(); }
+                sPrevDpadUp = dpadUp;
             }
             // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
             // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
