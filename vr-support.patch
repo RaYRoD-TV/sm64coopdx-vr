@@ -27,6 +27,45 @@ index 12e547a..37173b3 100644
  *.dump
  *.mio0
  *.z64
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..5b4f071
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,33 @@
++# Changelog
++
++## v0.2 - 2026-06-08
++
++VR
++- New VR Mode selector in the menu: Tabletop, Close-up, First-person. You can
++  also cycle the mode with d-pad up or the F10 key.
++- Tabletop mode now reads like an actual model on a table: smaller world, sat
++  lower and closer, with stronger stereo depth and a slight downward tilt so you
++  look down at it.
++- Tabletop and Close-up look controls now respond directly like first person
++  instead of the laggy accelerated camera.
++- The view recenters on whichever way you're facing when the game opens, so the
++  world is in front of you no matter how you started.
++- The menu panel sits at eye level instead of drifting toward the bottom.
++- Mouse look no longer inverts itself when the headset takes or loses focus.
++
++First person
++- Flip cam now pitches the view with the actual flip (triple jump, star and
++  wing triple jumps, side flip, rollouts), forward or back to match the move,
++  and the motion is smoothed out.
++- Added ease-back: when you talk to something or attack, the camera pulls back
++  to show Mario, then eases back into first person. He stays hidden otherwise
++  and is solid, not see-through, while shown.
++- Removed the old Show Body option. The ease-back replaces it.
++
++Input
++- Gamepad no longer stops responding in menus, including the in-game pause menu.
++  A stick push now reclaims the cursor if the mouse last had it.
++
++Flatscreen
++- Skybox covers the full screen again with no black bars, and stays anchored
++  without swimming, including after taking the headset off.
 diff --git a/Makefile b/Makefile
 index 9405b2b..4ff4b9a 100644
 --- a/Makefile
@@ -50,10 +89,10 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..20d868a 100644
+index 16ae934..718c10b 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,76 @@
+@@ -1,22 +1,77 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
@@ -124,7 +163,8 @@ index 16ae934..20d868a 100644
 +
 +![VR settings panel](VR_Menu_Preview/image2.png)
 +
-+The one keyboard shortcut is F10, which cycles the view (diorama / close-up / first-person).
++You can cycle the VR mode (Tabletop / Close-up / First-person) with d-pad up or the F10 key, or pick
++it from the VR Mode dropdown in the menu.
 +
 +## Building from source
 +
@@ -145,7 +185,7 @@ index 16ae934..20d868a 100644
 +by RaYRoD.
 diff --git a/VR_README.md b/VR_README.md
 new file mode 100644
-index 0000000..4095da2
+index 0000000..86dbc3d
 --- /dev/null
 +++ b/VR_README.md
 @@ -0,0 +1,76 @@
@@ -179,10 +219,10 @@ index 0000000..4095da2
 +
 +### VR settings (in-game)
 +
-+All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set view
-+distance, size, height, stereo depth, head motion, first person, and camera anti-clip, with a Reset
-+to Default button. The one keyboard shortcut is F10, which cycles the view (diorama / close-up /
-+first-person).
++All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set the VR
++mode, view distance, size, height, stereo depth, head motion, and camera anti-clip, with a Reset to
++Default button. You can also cycle the VR mode (Tabletop / Close-up / First-person) with d-pad up or
++the F10 key.
 +
 +## Building
 +
@@ -1078,7 +1118,7 @@ index 29f48ea..70c9b11 100644
      } else {
          controller_mouse_leave_relative();
 diff --git a/src/pc/djui/djui_cursor.c b/src/pc/djui/djui_cursor.c
-index f2c15c8..c44d8e5 100644
+index f2c15c8..a609815 100644
 --- a/src/pc/djui/djui_cursor.c
 +++ b/src/pc/djui/djui_cursor.c
 @@ -135,6 +135,14 @@ static void djui_cursor_update_position(void) {
@@ -1096,7 +1136,21 @@ index f2c15c8..c44d8e5 100644
      } else if (!sCursorMouseControlled || (sMouseCursor && !sMouseCursor->base.visible)) {
          f32 dist = sqrtf(powf(mouse_window_x - sSavedMouseX, 2) + powf(mouse_window_y - sSavedMouseY, 2));
          if (dist > 5) {
-@@ -147,6 +155,10 @@ static void djui_cursor_update_position(void) {
+@@ -143,10 +151,24 @@ static void djui_cursor_update_position(void) {
+         }
+     }
+ 
++    // A deliberate controller-stick push reclaims the cursor from the mouse, so the gamepad always works
++    // in menus even when the mouse last owned the cursor (e.g. the mouse was used earlier, then you open
++    // the in-game menu with the controller). Without this the stick is zeroed below and can never take
++    // back control, so only the d-pad worked, intermittently. Threshold is above the resting-stick bias.
++    if (sCursorMouseControlled &&
++        (gInteractablePad.stick_x > 40 || gInteractablePad.stick_x < -40 ||
++         gInteractablePad.stick_y > 40 || gInteractablePad.stick_y < -40)) {
++        sCursorMouseControlled = false;
++    }
++
+     // update mouse cursor
      if (sCursorMouseControlled) {
          gCursorX = mouse_window_x / djui_gfx_get_scale();
          gCursorY = mouse_window_y / djui_gfx_get_scale();
@@ -1788,7 +1842,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..21c812e 100644
+index 0d4f9f7..7b7cc1c 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1957,7 +2011,7 @@ index 0d4f9f7..21c812e 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +421,73 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +421,83 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1976,6 +2030,16 @@ index 0d4f9f7..21c812e 100644
 +                static bool sVrFpPrev = false;
 +                bool vrFp = vr_first_person_active();
 +                if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
++            }
++            // D-pad up cycles the VR mode, same as F10. gPlayer1Controller only carries fresh input
++            // during gameplay (a menu routes input elsewhere), and we also skip it while a panel is open,
++            // so it never fights menu navigation.
++            {
++                extern struct Controller *gPlayer1Controller; // game/game_init.h
++                extern bool djui_panel_is_active(void);        // pc/djui/djui_panel.h
++                if (gPlayer1Controller && (gPlayer1Controller->buttonPressed & U_JPAD) && !djui_panel_is_active()) {
++                    vr_cycle_preset();
++                }
 +            }
 +            // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
 +            // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
@@ -2031,7 +2095,7 @@ index 0d4f9f7..21c812e 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +646,7 @@ void game_deinit(void) {
+@@ -452,6 +656,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -2039,7 +2103,7 @@ index 0d4f9f7..21c812e 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +699,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +709,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -2057,10 +2121,10 @@ index 0d4f9f7..21c812e 100644
      if (gCLIOpts.console || gCLIOpts.headless) {
 diff --git a/src/pc/vr/vr.c b/src/pc/vr/vr.c
 new file mode 100644
-index 0000000..189f3bf
+index 0000000..9def8cf
 --- /dev/null
 +++ b/src/pc/vr/vr.c
-@@ -0,0 +1,1096 @@
+@@ -0,0 +1,1097 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +//
 +// STEP 1 (true stereo): boot an OpenXR session bound to the GL context, create
@@ -2759,6 +2823,7 @@ index 0000000..189f3bf
 +// --- In-game VR menu accessors (used by djui_panel_vr.c) ---------------------
 +int   vr_get_preset_index(void)      { return sCurrentPreset; }
 +void  vr_set_preset_index(int idx)   { vr_apply_preset(idx); } // 0=Tabletop, 1=Close-up, 2=First-person
++void  vr_cycle_preset(void)          { vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS); } // F10 / d-pad up
 +int   vr_get_preset_count(void)      { return VR_NUM_PRESETS; }
 +const char* vr_get_preset_name(int i){ return (i >= 0 && i < VR_NUM_PRESETS) ? sPresets[i].name : ""; }
 +float vr_get_menu_dist(void)         { return sMenuDist; }
@@ -2826,7 +2891,7 @@ index 0000000..189f3bf
 +
 +    static bool prevCycle = false;
 +    bool cyc = ks[SDL_SCANCODE_F10] != 0;
-+    if (cyc && !prevCycle) vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS);
++    if (cyc && !prevCycle) vr_cycle_preset();
 +    prevCycle = cyc;
 +}
 +
@@ -3159,10 +3224,10 @@ index 0000000..189f3bf
 +#endif
 diff --git a/src/pc/vr/vr.h b/src/pc/vr/vr.h
 new file mode 100644
-index 0000000..b959ead
+index 0000000..f5721ac
 --- /dev/null
 +++ b/src/pc/vr/vr.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,85 @@
 +// OpenXR VR support for the sm64coopdx PC port.
 +// Public interface - platform-agnostic, no OpenXR/GL types leak out.
 +#ifndef SM64COOPDX_VR_H
@@ -3189,6 +3254,7 @@ index 0000000..b959ead
 +// In-game VR options menu accessors (driven by the DJUI "VR" panel).
 +void  vr_set_first_person(bool on);     // toggle the first-person preset (life-size, eye at Mario's head)
 +int   vr_get_preset_index(void); void vr_set_preset_index(int idx); // VR mode: 0=Tabletop, 1=Close-up, 2=First-person
++void  vr_cycle_preset(void);     // cycle to the next VR mode (bound to F10 and d-pad up)
 +int   vr_get_preset_count(void); const char* vr_get_preset_name(int i);
 +float vr_get_menu_dist(void);    void vr_set_menu_dist(float v);    // flat menu panel distance (meters)
 +float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu panel width (meters)

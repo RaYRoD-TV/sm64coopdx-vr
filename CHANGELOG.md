@@ -3,7 +3,8 @@
 ## v0.2 - 2026-06-08
 
 VR
-- New VR Mode selector in the menu: Tabletop, Close-up, First-person.
+- New VR Mode selector in the menu: Tabletop, Close-up, First-person. You can
+  also cycle the mode with d-pad up or the F10 key.
 - Tabletop mode now reads like an actual model on a table: smaller world, sat
   lower and closer, with stronger stereo depth and a slight downward tilt so you
   look down at it.
@@ -24,7 +25,8 @@ First person
 - Removed the old Show Body option. The ease-back replaces it.
 
 Input
-- Gamepad no longer stops responding in menus.
+- Gamepad no longer stops responding in menus, including the in-game pause menu.
+  A stick push now reclaims the cursor if the mouse last had it.
 
 Flatscreen
 - Skybox covers the full screen again with no black bars, and stays anchored

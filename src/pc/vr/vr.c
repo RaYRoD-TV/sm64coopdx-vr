@@ -696,6 +696,7 @@ static void vr_apply_preset(int idx) {
 // --- In-game VR menu accessors (used by djui_panel_vr.c) ---------------------
 int   vr_get_preset_index(void)      { return sCurrentPreset; }
 void  vr_set_preset_index(int idx)   { vr_apply_preset(idx); } // 0=Tabletop, 1=Close-up, 2=First-person
+void  vr_cycle_preset(void)          { vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS); } // F10 / d-pad up
 int   vr_get_preset_count(void)      { return VR_NUM_PRESETS; }
 const char* vr_get_preset_name(int i){ return (i >= 0 && i < VR_NUM_PRESETS) ? sPresets[i].name : ""; }
 float vr_get_menu_dist(void)         { return sMenuDist; }
@@ -763,7 +764,7 @@ static void vr_poll_tuning_keys(void) {
 
     static bool prevCycle = false;
     bool cyc = ks[SDL_SCANCODE_F10] != 0;
-    if (cyc && !prevCycle) vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS);
+    if (cyc && !prevCycle) vr_cycle_preset();
     prevCycle = cyc;
 }
 

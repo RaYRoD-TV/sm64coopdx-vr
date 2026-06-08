@@ -437,6 +437,16 @@ void produce_interpolation_frames_and_delay(void) {
                 bool vrFp = vr_first_person_active();
                 if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
             }
+            // D-pad up cycles the VR mode, same as F10. gPlayer1Controller only carries fresh input
+            // during gameplay (a menu routes input elsewhere), and we also skip it while a panel is open,
+            // so it never fights menu navigation.
+            {
+                extern struct Controller *gPlayer1Controller; // game/game_init.h
+                extern bool djui_panel_is_active(void);        // pc/djui/djui_panel.h
+                if (gPlayer1Controller && (gPlayer1Controller->buttonPressed & U_JPAD) && !djui_panel_is_active()) {
+                    vr_cycle_preset();
+                }
+            }
             // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
             // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
             {

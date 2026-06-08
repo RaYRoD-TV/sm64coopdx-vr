@@ -28,10 +28,10 @@ buttons come from the controller or keyboard like the flat game.
 
 ### VR settings (in-game)
 
-All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set view
-distance, size, height, stereo depth, head motion, first person, and camera anti-clip, with a Reset
-to Default button. The one keyboard shortcut is F10, which cycles the view (diorama / close-up /
-first-person).
+All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set the VR
+mode, view distance, size, height, stereo depth, head motion, and camera anti-clip, with a Reset to
+Default button. You can also cycle the VR mode (Tabletop / Close-up / First-person) with d-pad up or
+the F10 key.
 
 ## Building
 

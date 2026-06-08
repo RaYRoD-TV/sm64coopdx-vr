@@ -151,6 +151,16 @@ static void djui_cursor_update_position(void) {
         }
     }
 
+    // A deliberate controller-stick push reclaims the cursor from the mouse, so the gamepad always works
+    // in menus even when the mouse last owned the cursor (e.g. the mouse was used earlier, then you open
+    // the in-game menu with the controller). Without this the stick is zeroed below and can never take
+    // back control, so only the d-pad worked, intermittently. Threshold is above the resting-stick bias.
+    if (sCursorMouseControlled &&
+        (gInteractablePad.stick_x > 40 || gInteractablePad.stick_x < -40 ||
+         gInteractablePad.stick_y > 40 || gInteractablePad.stick_y < -40)) {
+        sCursorMouseControlled = false;
+    }
+
     // update mouse cursor
     if (sCursorMouseControlled) {
         gCursorX = mouse_window_x / djui_gfx_get_scale();

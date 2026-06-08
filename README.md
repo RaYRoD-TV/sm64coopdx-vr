@@ -55,7 +55,8 @@ plus a Reset to Default button:
 
 ![VR settings panel](VR_Menu_Preview/image2.png)
 
-The one keyboard shortcut is F10, which cycles the view (diorama / close-up / first-person).
+You can cycle the VR mode (Tabletop / Close-up / First-person) with d-pad up or the F10 key, or pick
+it from the VR Mode dropdown in the menu.
 
 ## Building from source
 
