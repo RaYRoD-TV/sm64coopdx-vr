@@ -9,6 +9,7 @@
 #include "mario.h"
 #include "hardcoded.h"
 #include "save_file.h"
+#include "ingame_menu.h" // get_dialog_id
 
 #include "engine/math_util.h"
 
@@ -26,6 +27,7 @@ struct FirstPersonCamera gFirstPersonCamera = {
     .centerL = true,
     .showBody = false,
     .flipCam = false,
+    .interactCam = true,
     .pitch = 0,
     .yaw = 0,
     .crouch = 0,
@@ -134,18 +136,47 @@ static void first_person_camera_update(void) {
         gFirstPersonCamera.crouch = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT;
     }
 
-    // update pos
-    gLakituState.pos[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) + coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
-    gLakituState.pos[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) + sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
-    gLakituState.pos[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) + coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
+    // first-person eye pose at Mario's head
+    Vec3f fpPos, fpFocus;
+    fpPos[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) + coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
+    fpPos[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) + sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
+    fpPos[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) + coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
+    fpFocus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
+    fpFocus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
+    fpFocus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
+
+    // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
+    // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
+    // yourself act. Ease out is slower than ease in so rapid punches don't snap the camera around.
+    static f32 sPullback = 0.0f;
+    bool wantPull = gFirstPersonCamera.interactCam
+                 && (get_dialog_id() != DIALOG_NONE || (m->action & ACT_FLAG_ATTACKING) != 0);
+    f32 pTarget = wantPull ? 1.0f : 0.0f;
+    sPullback += (pTarget - sPullback) * ((pTarget > sPullback) ? 0.12f : 0.06f);
+
+    if (sPullback > 0.001f) {
+        Vec3f look = { fpFocus[0] - fpPos[0], fpFocus[1] - fpPos[1], fpFocus[2] - fpPos[2] };
+        vec3f_normalize(look);
+        f32 t = sPullback;
+        f32 dist = 420.0f * t, up = 170.0f * t;
+        Vec3f marioHead = {
+            m->pos[0] + gFirstPersonCamera.offset[0],
+            m->pos[1] + gFirstPersonCamera.offset[1] + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch),
+            m->pos[2] + gFirstPersonCamera.offset[2],
+        };
+        gLakituState.pos[0] = fpPos[0] - look[0] * dist;
+        gLakituState.pos[1] = fpPos[1] - look[1] * dist + up;
+        gLakituState.pos[2] = fpPos[2] - look[2] * dist;
+        gLakituState.focus[0] = fpFocus[0] + (marioHead[0] - fpFocus[0]) * t;
+        gLakituState.focus[1] = fpFocus[1] + (marioHead[1] - fpFocus[1]) * t;
+        gLakituState.focus[2] = fpFocus[2] + (marioHead[2] - fpFocus[2]) * t;
+    } else {
+        vec3f_copy(gLakituState.pos, fpPos);
+        vec3f_copy(gLakituState.focus, fpFocus);
+    }
     vec3f_copy(m->area->camera->pos, gLakituState.pos);
     vec3f_copy(gLakituState.curPos, gLakituState.pos);
     vec3f_copy(gLakituState.goalPos, gLakituState.pos);
-
-    // update focus
-    gLakituState.focus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
-    gLakituState.focus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
-    gLakituState.focus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
     vec3f_copy(m->area->camera->focus, gLakituState.focus);
     vec3f_copy(gLakituState.curFocus, gLakituState.focus);
     vec3f_copy(gLakituState.goalFocus, gLakituState.focus);
@@ -213,6 +244,7 @@ void first_person_reset(void) {
     gFirstPersonCamera.centerL = true;
     gFirstPersonCamera.showBody = false;
     gFirstPersonCamera.flipCam = false;
+    gFirstPersonCamera.interactCam = true;
     gFirstPersonCamera.pitch = 0;
     gFirstPersonCamera.yaw = 0;
     gFirstPersonCamera.crouch = 0;

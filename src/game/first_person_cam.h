@@ -16,6 +16,7 @@ struct FirstPersonCamera {
     bool centerL;
     bool showBody;   // first-person: render Mario's torso/arms/legs (head stays hidden so it can't block the view)
     bool flipCam;    // first-person: roll the view with Mario's flip jumps (backflip / side flip / rollouts)
+    bool interactCam;// first-person: ease the camera back to show Mario when interacting/attacking, then ease in
     s16 pitch;
     s16 yaw;
     f32 crouch;

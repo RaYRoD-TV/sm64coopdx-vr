@@ -432,19 +432,28 @@ index 5406e94..f7fa93d 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22..a5654c7 100644
+index 4bfed22..2f66474 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
-@@ -24,6 +24,8 @@ struct FirstPersonCamera gFirstPersonCamera = {
+@@ -9,6 +9,7 @@
+ #include "mario.h"
+ #include "hardcoded.h"
+ #include "save_file.h"
++#include "ingame_menu.h" // get_dialog_id
+ 
+ #include "engine/math_util.h"
+ 
+@@ -24,6 +25,9 @@ struct FirstPersonCamera gFirstPersonCamera = {
      .forceYaw = false,
      .forceRoll = true,
      .centerL = true,
 +    .showBody = false,
 +    .flipCam = false,
++    .interactCam = true,
      .pitch = 0,
      .yaw = 0,
      .crouch = 0,
-@@ -63,6 +65,12 @@ static void first_person_camera_update(void) {
+@@ -63,6 +67,12 @@ static void first_person_camera_update(void) {
      struct MarioState *m = &gMarioStates[0];
      f32 sensX = 0.3f * camera_config_get_x_sensitivity();
      f32 sensY = 0.4f * camera_config_get_y_sensitivity();
@@ -457,7 +466,7 @@ index 4bfed22..a5654c7 100644
  
      if (mouse_relative_enabled) {
          // hack: make c buttons work for moving the camera
-@@ -77,7 +85,7 @@ static void first_person_camera_update(void) {
+@@ -77,7 +87,7 @@ static void first_person_camera_update(void) {
  
          // update pitch
          if (!gFirstPersonCamera.forcePitch) {
@@ -466,7 +475,7 @@ index 4bfed22..a5654c7 100644
              gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
          }
  
-@@ -86,7 +94,7 @@ static void first_person_camera_update(void) {
+@@ -86,7 +96,7 @@ static void first_person_camera_update(void) {
              if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
                  gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
              } else {
@@ -475,7 +484,62 @@ index 4bfed22..a5654c7 100644
              }
          }
      }
-@@ -143,7 +151,10 @@ static void first_person_camera_update(void) {
+@@ -126,24 +136,56 @@ static void first_person_camera_update(void) {
+         gFirstPersonCamera.crouch = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT;
+     }
+ 
+-    // update pos
+-    gLakituState.pos[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) + coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
+-    gLakituState.pos[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) + sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
+-    gLakituState.pos[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) + coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
++    // first-person eye pose at Mario's head
++    Vec3f fpPos, fpFocus;
++    fpPos[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) + coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
++    fpPos[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) + sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
++    fpPos[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) + coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
++    fpFocus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
++    fpFocus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
++    fpFocus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
++
++    // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
++    // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
++    // yourself act. Ease out is slower than ease in so rapid punches don't snap the camera around.
++    static f32 sPullback = 0.0f;
++    bool wantPull = gFirstPersonCamera.interactCam
++                 && (get_dialog_id() != DIALOG_NONE || (m->action & ACT_FLAG_ATTACKING) != 0);
++    f32 pTarget = wantPull ? 1.0f : 0.0f;
++    sPullback += (pTarget - sPullback) * ((pTarget > sPullback) ? 0.12f : 0.06f);
++
++    if (sPullback > 0.001f) {
++        Vec3f look = { fpFocus[0] - fpPos[0], fpFocus[1] - fpPos[1], fpFocus[2] - fpPos[2] };
++        vec3f_normalize(look);
++        f32 t = sPullback;
++        f32 dist = 420.0f * t, up = 170.0f * t;
++        Vec3f marioHead = {
++            m->pos[0] + gFirstPersonCamera.offset[0],
++            m->pos[1] + gFirstPersonCamera.offset[1] + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch),
++            m->pos[2] + gFirstPersonCamera.offset[2],
++        };
++        gLakituState.pos[0] = fpPos[0] - look[0] * dist;
++        gLakituState.pos[1] = fpPos[1] - look[1] * dist + up;
++        gLakituState.pos[2] = fpPos[2] - look[2] * dist;
++        gLakituState.focus[0] = fpFocus[0] + (marioHead[0] - fpFocus[0]) * t;
++        gLakituState.focus[1] = fpFocus[1] + (marioHead[1] - fpFocus[1]) * t;
++        gLakituState.focus[2] = fpFocus[2] + (marioHead[2] - fpFocus[2]) * t;
++    } else {
++        vec3f_copy(gLakituState.pos, fpPos);
++        vec3f_copy(gLakituState.focus, fpFocus);
++    }
+     vec3f_copy(m->area->camera->pos, gLakituState.pos);
+     vec3f_copy(gLakituState.curPos, gLakituState.pos);
+     vec3f_copy(gLakituState.goalPos, gLakituState.pos);
+-
+-    // update focus
+-    gLakituState.focus[0] = (m->pos[0] + gFirstPersonCamera.offset[0]) - 100 * coss(gFirstPersonCamera.pitch) * sins(gFirstPersonCamera.yaw);
+-    gLakituState.focus[1] = (m->pos[1] + gFirstPersonCamera.offset[1]) - 100 * sins(gFirstPersonCamera.pitch) + (FIRST_PERSON_MARIO_HEAD_POS - gFirstPersonCamera.crouch);
+-    gLakituState.focus[2] = (m->pos[2] + gFirstPersonCamera.offset[2]) - 100 * coss(gFirstPersonCamera.pitch) * coss(gFirstPersonCamera.yaw);
+     vec3f_copy(m->area->camera->focus, gLakituState.focus);
+     vec3f_copy(gLakituState.curFocus, gLakituState.focus);
      vec3f_copy(gLakituState.goalFocus, gLakituState.focus);
  
      // set other values
@@ -487,7 +551,7 @@ index 4bfed22..a5654c7 100644
          gLakituState.roll = 0;
      }
      gLakituState.posHSpeed = 0;
-@@ -174,7 +185,14 @@ void first_person_update(void) {
+@@ -174,7 +216,14 @@ void first_person_update(void) {
              level_trigger_warp(m, WARP_OP_LOOK_UP);
          }
  
@@ -503,16 +567,17 @@ index 4bfed22..a5654c7 100644
          if (m->heldObj) {
              Vec3f camDir = {
                  m->area->camera->focus[0] - m->area->camera->pos[0],
-@@ -193,6 +211,8 @@ void first_person_update(void) {
+@@ -193,6 +242,9 @@ void first_person_update(void) {
  void first_person_reset(void) {
      gFirstPersonCamera.forceRoll = false;
      gFirstPersonCamera.centerL = true;
 +    gFirstPersonCamera.showBody = false;
 +    gFirstPersonCamera.flipCam = false;
++    gFirstPersonCamera.interactCam = true;
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +221,32 @@ void first_person_reset(void) {
+@@ -201,3 +253,32 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -546,19 +611,20 @@ index 4bfed22..a5654c7 100644
 +    return (f32)first_person_flip_roll(&gMarioStates[0]) * (3.14159265358979f / 32768.0f);
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf..fd486d5 100644
+index 42bfeaf..7658d63 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
-@@ -14,6 +14,8 @@ struct FirstPersonCamera {
+@@ -14,6 +14,9 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
 +    bool showBody;   // first-person: render Mario's torso/arms/legs (head stays hidden so it can't block the view)
 +    bool flipCam;    // first-person: roll the view with Mario's flip jumps (backflip / side flip / rollouts)
++    bool interactCam;// first-person: ease the camera back to show Mario when interacting/attacking, then ease in
      s16 pitch;
      s16 yaw;
      f32 crouch;
-@@ -35,4 +37,9 @@ void first_person_update(void);
+@@ -35,4 +38,9 @@ void first_person_update(void);
  /* |description|Resets first person|descriptionEnd| */
  void first_person_reset(void);
  
@@ -1186,10 +1252,10 @@ index 6a4c2ef..b772b91 100644
          if (gNetworkType == NT_SERVER) {
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
-index 0000000..b0eb880
+index 0000000..6553dce
 --- /dev/null
 +++ b/src/pc/djui/djui_panel_vr.c
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,137 @@
 +#include "djui.h"
 +#include "djui_panel.h"
 +#include "djui_panel_menu.h"
@@ -1208,6 +1274,7 @@ index 0000000..b0eb880
 +static bool sFp;                // first person on/off
 +static bool sShowBody;          // first person: show Mario's body (torso/arms/legs)
 +static bool sFlipCam;           // first person: roll the view with Mario's flip jumps
++static bool sInteractCam;       // first person: ease back to show Mario when interacting/attacking
 +static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
 +static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 +static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
@@ -1218,7 +1285,7 @@ index 0000000..b0eb880
 +static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 +
 +// Widget handles, so Reset to Default can refresh what's on screen.
-+static struct DjuiCheckbox *cbFp, *cbShowBody, *cbFlipCam, *cbAntiClip;
++static struct DjuiCheckbox *cbFp, *cbShowBody, *cbFlipCam, *cbInteractCam, *cbAntiClip;
 +static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 +
 +static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
@@ -1232,6 +1299,7 @@ index 0000000..b0eb880
 +    sFp         = vr_first_person_active() || get_first_person_enabled();
 +    sShowBody   = gFirstPersonCamera.showBody;
 +    sFlipCam    = gFirstPersonCamera.flipCam;
++    sInteractCam = gFirstPersonCamera.interactCam;
 +    sAntiClip   = vr_anticlip_is_enabled();
 +    sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
 +    sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
@@ -1247,6 +1315,7 @@ index 0000000..b0eb880
 +    if (cbFp)       { djui_base_set_visible(&cbFp->rectValue->base,       sFp); }
 +    if (cbShowBody) { djui_base_set_visible(&cbShowBody->rectValue->base, sShowBody); }
 +    if (cbFlipCam)  { djui_base_set_visible(&cbFlipCam->rectValue->base,  sFlipCam); }
++    if (cbInteractCam) { djui_base_set_visible(&cbInteractCam->rectValue->base, sInteractCam); }
 +    if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
 +    if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
 +    if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
@@ -1270,6 +1339,7 @@ index 0000000..b0eb880
 +static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 +static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
 +static void vr_panel_showbody_changed(UNUSED struct DjuiBase* caller)  { gFirstPersonCamera.showBody = sShowBody; }
++static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; }
 +static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
 +    gFirstPersonCamera.flipCam = sFlipCam;
 +    // Flip Cam only does anything in the VR first-person view (the roll in vr.c gates on it), so turning
@@ -1293,7 +1363,7 @@ index 0000000..b0eb880
 +    vr_panel_seed_proxies();
 +    // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
 +    // previous open must not be reused.
-+    cbFp = cbShowBody = cbFlipCam = cbAntiClip = NULL;
++    cbFp = cbShowBody = cbFlipCam = cbInteractCam = cbAntiClip = NULL;
 +    slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 +
 +    struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
@@ -1303,6 +1373,7 @@ index 0000000..b0eb880
 +        cbFp = djui_checkbox_create(body, "First Person", &sFp, vr_panel_fp_changed);
 +        cbShowBody = djui_checkbox_create(body, "FP Show Body", &sShowBody, vr_panel_showbody_changed);
 +        cbFlipCam = djui_checkbox_create(body, "FP Flip Cam (intense)", &sFlipCam, vr_panel_flipcam_changed);
++        cbInteractCam = djui_checkbox_create(body, "FP Ease-Back on Interact", &sInteractCam, vr_panel_interactcam_changed);
 +
 +        // The rest only matters with VR running, so hide it in plain flatscreen sessions.
 +        if (vr_is_requested()) {
