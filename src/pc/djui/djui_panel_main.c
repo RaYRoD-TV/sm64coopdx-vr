@@ -1,6 +1,7 @@
 #include "djui.h"
 #include "djui_panel.h"
 #include "djui_panel_host.h"
+#include "djui_panel_host_mods.h" // djui_panel_host_mods_create - pick mods from the main menu before Play
 #include "djui_panel_join.h"
 #include "djui_panel_options.h"
 #include "djui_panel_menu.h"
@@ -50,6 +51,12 @@ void djui_panel_main_create(struct DjuiBase* caller) {
             struct DjuiButton* buttonPlay = djui_button_create(body, "Play", DJUI_BUTTON_STYLE_NORMAL, djui_panel_play);
             if (!configExCoopTheme) { djui_base_set_location(&buttonPlay->base, 0, -30); }
             djui_cursor_input_controlled_center(&buttonPlay->base);
+
+            // Pick mods here before pressing Play. Enabled mods are saved and loaded into the next game you
+            // start, so this is how you turn mods on without going through the full Host setup. (Mods are
+            // committed when a game starts, so they can't be toggled mid-session - pick them, then Play.)
+            struct DjuiButton* buttonMods = djui_button_create(body, "Mods", DJUI_BUTTON_STYLE_NORMAL, djui_panel_host_mods_create);
+            if (!configExCoopTheme) { djui_base_set_location(&buttonMods->base, 0, -30); }
 
             struct DjuiButton* button1 = djui_button_create(body, DLANG(MAIN, HOST), DJUI_BUTTON_STYLE_NORMAL, djui_panel_host_create);
             if (!configExCoopTheme) { djui_base_set_location(&button1->base, 0, -30); }

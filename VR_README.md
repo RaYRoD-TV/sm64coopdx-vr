@@ -30,7 +30,7 @@ buttons come from the controller or keyboard like the flat game.
 
 All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set the VR
 mode, view distance, size, height, stereo depth, head motion, and camera anti-clip, with a Reset to
-Default button. You can also cycle the VR mode (Tabletop / Close-up / First-person) with d-pad up or
+Default button. You can also cycle the VR mode (Diorama / Close-up / First-person) with d-pad up or
 the F10 key.
 
 ## Building

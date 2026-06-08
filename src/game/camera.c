@@ -3190,6 +3190,22 @@ void update_camera(struct Camera *c) {
     gCamera = c;
     update_camera_hud_status(c);
 
+    // VR Tabletop uses the free orbit camera (Puppycam) so you can look around the model from any angle.
+    // Force it on while in tabletop and restore the player's free-cam preference when leaving. Close-up,
+    // first-person and flatscreen are untouched. newcam_toggle is a no-op when already in the target state.
+    {
+        static bool sVrForcedNewcam = false;
+        if (vr_is_tabletop_mode()) {
+            if (!gNewCamera.isActive) { newcam_toggle(true); }
+            gNewCamera.hasCollision = true; // force orbit-camera wall collision so it can't pass through walls
+            sVrForcedNewcam = true;
+        } else if (sVrForcedNewcam) {
+            newcam_toggle(camera_config_is_free_cam_enabled());
+            gNewCamera.hasCollision = camera_config_is_collision_enabled(); // restore the player's preference
+            sVrForcedNewcam = false;
+        }
+    }
+
     if ((gOverrideFreezeCamera || get_first_person_enabled()) && !gDjuiInMainMenu) {
         return;
     }
@@ -3208,7 +3224,13 @@ void update_camera(struct Camera *c) {
     if (c->cutscene == 0) {
         // Only process R_TRIG if 'fixed' is not selected in the menu
         if (cam_select_alt_mode(0) == CAM_SELECTION_MARIO && c->mode != CAMERA_MODE_NEWCAM) {
-            if ((sCurrPlayMode != PLAY_MODE_PAUSED) && gPlayer1Controller->buttonPressed & R_TRIG) {
+            // A VR Close-up is a fixed vantage you look INTO; the rigid behind-Mario "Mario cam" spins the
+            // whole diorama as Mario turns and reads as the view breaking. Keep Close-up on the Lakitu orbit
+            // camera - ignore the R toggle and snap back to Lakitu if it was left on Mario cam. Tabletop is
+            // excluded: it runs the free orbit camera (Puppycam) instead, handled above.
+            if (vr_is_active() && !vr_first_person_active() && !vr_is_tabletop_mode()) {
+                set_cam_angle(CAM_ANGLE_LAKITU);
+            } else if ((sCurrPlayMode != PLAY_MODE_PAUSED) && gPlayer1Controller->buttonPressed & R_TRIG) {
                 bool allowSetCamAngle = true;
                 if (set_cam_angle(0) == CAM_ANGLE_LAKITU) {
                     smlua_call_event_hooks(HOOK_ON_CHANGE_CAMERA_ANGLE, CAM_ANGLE_MARIO, &allowSetCamAngle);

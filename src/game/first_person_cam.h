@@ -8,6 +8,10 @@
 #define FIRST_PERSON_MARIO_HEAD_POS 120
 #define FIRST_PERSON_MARIO_HEAD_POS_SHORT 60
 
+// Peak side-flip lean (s16 angle units; 0x2000 ~ 45 deg). A side flip tips the view this far toward the
+// side it flips and settles back to level, so it reads as a side flip without a disorienting barrel roll.
+#define FIRST_PERSON_SIDE_FLIP_LEAN 0x2000
+
 struct FirstPersonCamera {
     bool enabled;
     bool forcePitch;
@@ -37,6 +41,13 @@ void set_first_person_enabled(bool enable);
 void first_person_update(void);
 /* |description|Resets first person|descriptionEnd| */
 void first_person_reset(void);
+
+// First-person toggle accessors (used by the VR settings file so it can be remembered across launches).
+bool first_person_get_flip_cam(void);       void first_person_set_flip_cam(bool on);
+bool first_person_get_interact_cam(void);   void first_person_set_interact_cam(bool on);
+
+// VR Tabletop: back out of (and block) the C-up look-around state, which would otherwise freeze movement.
+void first_person_exit_lookaround_for_tabletop(void);
 
 /* |description|Synthetic flip-roll angle (s16) for the current action when FP Flip Cam is on, else 0|descriptionEnd| */
 s16 first_person_flip_roll(struct MarioState *m);

@@ -17,6 +17,10 @@ bool  vr_headset_present(void);
 // Is an OpenXR session live and actively rendering?
 bool  vr_is_active(void);
 
+// Is the headset actually being worn (session focused)? False the instant it's taken off, even while the
+// session is still running - use this to fall back to flat input behaviour (mouse, hotkeys) when doffed.
+bool  vr_is_focused(void);
+
 // Is true first-person mode on? When true the caller enables the game's first-person camera so the
 // viewpoint sits at Mario's head; VR then renders it life-size.
 bool  vr_first_person_active(void);
@@ -33,7 +37,11 @@ float vr_get_diorama_scale(void);void vr_set_diorama_scale(float v);// diorama s
 float vr_get_stereo(void);       void vr_set_stereo(float v);       // stereo separation strength
 float vr_get_diorama_height(void); void vr_set_diorama_height(float v); // diorama height offset (meters)
 float vr_get_head_scale(void);   void vr_set_head_scale(float v);   // 6DoF head-motion damping (0=locked, 1=full)
+int   vr_get_refresh_rate(void);                                    // headset refresh in Hz (0 until the runtime reports it)
+float vr_get_hud_size(void);     void vr_set_hud_size(float v);     // VR gameplay HUD panel width (meters)
+bool  vr_is_tabletop_mode(void);                                    // true in the Tabletop preset (free orbit camera)
 void  vr_reset_defaults(void);   // reset every VR tunable to launch defaults
+void  vr_settings_mark_dirty(void); // note a VR menu change so it gets saved to vr_settings.txt (debounced)
 
 // Geometry anti-clip (diorama/close-up). pc_main computes the world-space eye + collision and writes
 // back the anchor offset; vr.c just stores the per-frame geometry and applies the offset.

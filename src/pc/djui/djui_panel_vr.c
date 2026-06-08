@@ -10,7 +10,7 @@
 #include "game/hud.h" // gMenuHideHud
 
 // VR mode dropdown choices (order matches the vr.c preset table: 0=Tabletop, 1=Close-up, 2=First-person).
-static char* sVrModeChoices[] = { "Tabletop", "Close-up", "First-person" };
+static char* sVrModeChoices[] = { "Diorama", "Close-up", "First-person" };
 
 // In-game VR settings. DJUI sliders are integer-valued, so each one uses a small proxy that scales
 // to/from the VR module's float tunables. Values apply live as you drag, and you can see the current
@@ -26,6 +26,7 @@ static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep t
 static bool sHideHud;           // hide the on-screen HUD (lives/stars/power meter)
 static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
+static unsigned int sHudSizeI;  // gameplay HUD width, tenths of a meter (10..60 = 1.0..6.0 m)
 static unsigned int sDioDistI;  // diorama distance, hundredths offset by 2 m (0..300 = -2.0..1.0 m)
 static unsigned int sDioSizeI;  // diorama scale, game units per meter (bigger = smaller world)
 static unsigned int sDioHeightI;// diorama height, hundredths offset by 1 m (0..200 = -1.0..1.0 m)
@@ -35,7 +36,7 @@ static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 =
 // Widget handles, so Reset to Default can refresh what's on screen.
 static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip, *cbHideHud;
 static struct DjuiSelectionbox *sbMode;
-static struct DjuiSlider   *slMenuDist, *slMenuSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
+static struct DjuiSlider   *slMenuDist, *slMenuSize, *slHudSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slHead;
 
 static unsigned int clampu(float v, unsigned int lo, unsigned int hi) {
     if (v < (float)lo) { return lo; }
@@ -53,6 +54,7 @@ static void vr_panel_seed_proxies(void) {
     sHideHud    = (gMenuHideHud != 0);
     sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
     sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
+    sHudSizeI   = clampu(vr_get_hud_size()     * 10.0f,            10, 60);
     sDioDistI   = clampu((vr_get_diorama_dist()   + 2.0f) * 100.0f, 0, 300);
     sDioSizeI   = clampu(vr_get_diorama_scale(),                   30, 3000);
     sDioHeightI = clampu((vr_get_diorama_height() + 1.0f) * 100.0f, 0, 200);
@@ -70,6 +72,7 @@ static void vr_panel_refresh_widgets(void) {
     if (cbHideHud)  { djui_base_set_visible(&cbHideHud->rectValue->base,  sHideHud); }
     if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
     if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
+    if (slHudSize)   { djui_slider_update_value(&slHudSize->base); }
     if (slDioDist)   { djui_slider_update_value(&slDioDist->base); }
     if (slDioSize)   { djui_slider_update_value(&slDioSize->base); }
     if (slDioHeight) { djui_slider_update_value(&slDioHeight->base); }
@@ -87,16 +90,18 @@ static void vr_panel_mode_changed(UNUSED struct DjuiBase* caller) {
 }
 static void vr_panel_menu_dist_changed(UNUSED struct DjuiBase* caller) { vr_set_menu_dist((float)sMenuDistI / 10.0f); }
 static void vr_panel_menu_size_changed(UNUSED struct DjuiBase* caller) { vr_set_menu_size((float)sMenuSizeI / 10.0f); }
+static void vr_panel_hud_size_changed(UNUSED struct DjuiBase* caller)  { vr_set_hud_size((float)sHudSizeI / 10.0f); }
 static void vr_panel_dio_dist_changed(UNUSED struct DjuiBase* caller)  { vr_set_diorama_dist((float)sDioDistI / 100.0f - 2.0f); }
 static void vr_panel_dio_size_changed(UNUSED struct DjuiBase* caller)  { vr_set_diorama_scale((float)sDioSizeI); }
 static void vr_panel_dio_height_changed(UNUSED struct DjuiBase* caller){ vr_set_diorama_height((float)sDioHeightI / 100.0f - 1.0f); }
 static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_stereo((float)sStereoI / 100.0f); }
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
-static void vr_panel_hidehud_changed(UNUSED struct DjuiBase* caller)   { gMenuHideHud = sHideHud ? 1 : 0; }
-static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; }
+static void vr_panel_hidehud_changed(UNUSED struct DjuiBase* caller)   { gMenuHideHud = sHideHud ? 1 : 0; vr_settings_mark_dirty(); }
+static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; vr_settings_mark_dirty(); }
 static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
     gFirstPersonCamera.flipCam = sFlipCam;
+    vr_settings_mark_dirty();
     // Flip Cam only does anything in the VR first-person view (the roll in vr.c gates on it), so turning
     // it on switches the VR Mode dropdown to First-person.
     if (sFlipCam && vr_is_active() && !vr_first_person_active()) {
@@ -122,9 +127,10 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
     // previous open must not be reused.
     cbFp = cbFlipCam = cbInteractCam = cbAntiClip = cbHideHud = NULL;
     sbMode = NULL;
-    slMenuDist = slMenuSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
+    slMenuDist = slMenuSize = slHudSize = slDioDist = slDioSize = slDioHeight = slStereo = slHead = NULL;
 
     struct DjuiThreePanel* panel = djui_panel_menu_create("VR", false);
+    panel->base.tag = DJUI_PANEL_TAG_VR; // so VR keeps the live stereo diorama under this menu (not the flat panel)
     struct DjuiBase* body = djui_three_panel_get_body(panel);
     {
         // VR shows the mode dropdown (Tabletop / Close-up / First-person). Flatscreen, where the shrunk
@@ -142,6 +148,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
         if (vr_is_requested()) {
             slMenuDist  = djui_slider_create(body, "Menu Distance",    &sMenuDistI,  10, 80,   vr_panel_menu_dist_changed);
             slMenuSize  = djui_slider_create(body, "Menu Size",        &sMenuSizeI,  20, 120,  vr_panel_menu_size_changed);
+            slHudSize   = djui_slider_create(body, "HUD Size",         &sHudSizeI,   10, 60,   vr_panel_hud_size_changed);
             slDioDist   = djui_slider_create(body, "Diorama Distance", &sDioDistI,   0,  300,  vr_panel_dio_dist_changed);
             slDioSize   = djui_slider_create(body, "Diorama Size",     &sDioSizeI,   30, 3000, vr_panel_dio_size_changed);
             slDioHeight = djui_slider_create(body, "Diorama Height",   &sDioHeightI, 0,  200,  vr_panel_dio_height_changed);

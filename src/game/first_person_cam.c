@@ -41,7 +41,11 @@ extern s16 gMenuMode;
 bool first_person_check_cancels(struct MarioState *m) {
     // Note: ACT_FLYING is intentionally NOT cancelled, so first-person stays on while flying (wing cap).
     // The flying yaw/pitch is handled below in the per-action fix-up list.
-    if (m->action == ACT_FIRST_PERSON || m->action == ACT_IN_CANNON || m->action == ACT_READING_NPC_DIALOG || m->action == ACT_DISAPPEARED) {
+    // ACT_READING_NPC_DIALOG is intentionally NOT cancelled either: cancelling it dropped first-person to
+    // the NPC dialog camera (the view "got stuck" when you switched modes mid-conversation) AND it blocked
+    // the interact ease-back, which triggers on get_dialog_id() and so never ran for characters. Staying in
+    // first-person lets the ease-back pull back to show Mario talking, the way it already does for signs.
+    if (m->action == ACT_FIRST_PERSON || m->action == ACT_IN_CANNON || m->action == ACT_DISAPPEARED) {
         return true;
     }
     if (find_object_with_behavior(smlua_override_behavior(bhvActSelector)) != NULL) { return true; }
@@ -64,6 +68,29 @@ bool get_first_person_enabled(void) {
 
 void set_first_person_enabled(bool enable) {
     gFirstPersonCamera.enabled = enable;
+    // Switching view mode starts the interact ease-back fresh, so a half-eased camera left over from the
+    // previous mode (e.g. switching modes mid-conversation) can't carry over and leave the view stuck.
+    gFirstPersonCamera.easeBack = 0.0f;
+}
+
+// Accessors so the VR settings file (pc/vr/vr.c) can remember the first-person toggles without pulling in
+// the whole first-person header. flipCam = roll/pitch the view with flips; interactCam = ease back on interact.
+bool first_person_get_flip_cam(void)      { return gFirstPersonCamera.flipCam; }
+void first_person_set_flip_cam(bool on)   { gFirstPersonCamera.flipCam = on; }
+bool first_person_get_interact_cam(void)  { return gFirstPersonCamera.interactCam; }
+void first_person_set_interact_cam(bool on){ gFirstPersonCamera.interactCam = on; }
+
+// VR Tabletop: the C-up "look around" first-person state (right-stick up) freezes Mario and blocks movement,
+// which is pointless in the tabletop diorama. While in tabletop, stop it engaging and back out if already in
+// it. Called every frame from pc_main's VR loop (it no-ops outside tabletop).
+void first_person_exit_lookaround_for_tabletop(void) {
+    if (!vr_is_tabletop_mode()) { return; }
+    gCameraMovementFlags &= ~CAM_MOVE_C_UP_MODE; // never enter C-up look-around in tabletop
+    struct MarioState *m = &gMarioStates[0];
+    if (m != NULL && m->action == ACT_FIRST_PERSON) {
+        m->input &= ~INPUT_FIRST_PERSON;
+        set_mario_action(m, ACT_IDLE, 0);
+    }
 }
 
 static void first_person_camera_update(void) {
@@ -119,9 +146,13 @@ static void first_person_camera_update(void) {
             break;
         }
     }
-    if (m->action == ACT_LEDGE_GRAB) {
+    // Ledge grab: snap to face the ledge the moment you grab it, then leave the yaw FREE so you can look
+    // left/right while hanging instead of being locked staring at the wall.
+    static u32 sFpLedgePrevAction = 0;
+    if (m->action == ACT_LEDGE_GRAB && sFpLedgePrevAction != ACT_LEDGE_GRAB) {
         gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
     }
+    sFpLedgePrevAction = m->action;
 
     gLakituState.yaw = gFirstPersonCamera.yaw;
     m->area->camera->yaw = gFirstPersonCamera.yaw;
@@ -261,33 +292,77 @@ void first_person_reset(void) {
     gFirstPersonCamera.offset[2] = 0;
 }
 
-// Flip jumps (backflip / side flip / rollouts) rotate the model through baked animation, not the
-// object angle, so there's nothing simple to read. Instead we SYNTHESIZE a roll from the animation's
-// progress: 0 at the start of the flip, building to one full turn by the end. Flatscreen applies this
-// as a 2D screen roll; VR injects it into the eye view (pc_main -> vr_set_flip_roll). Off unless the
-// FP Flip Cam toggle is on.
+// Pole/tree actions. A wall-kick that LEAVES one of these is "jumping off a tree" (it flips); an ordinary
+// wall kick off a wall is not (it doesn't), so the same ACT_WALL_KICK_AIR only flips when it came off a tree.
+static bool fp_is_pole_action(u32 action) {
+    return action == ACT_HOLDING_POLE || action == ACT_CLIMBING_POLE
+        || action == ACT_GRAB_POLE_SLOW || action == ACT_GRAB_POLE_FAST
+        || action == ACT_TOP_OF_POLE || action == ACT_TOP_OF_POLE_TRANSITION;
+}
+
+// Flip jumps (backflip / side flip / rollouts / tree jumps) rotate the model through baked animation, not
+// the object angle, so there's nothing simple to read. Instead we SYNTHESIZE the camera move from the
+// animation's progress. Forward/back somersaults PITCH a full turn; the side flip LEANS to the side it
+// actually flips. Flatscreen applies this directly; VR injects it into the eye view (pc_main ->
+// vr_set_flip_roll). Off unless the FP Flip Cam toggle is on, and it only moves the view - never control.
 s16 first_person_flip_roll(struct MarioState *m) {
     if (!gFirstPersonCamera.flipCam || !gFirstPersonCamera.enabled || m == NULL || m->marioObj == NULL) { return 0; }
-    // Returns the flip angle for the current move. Callers route it to a PITCH (forward/back somersaults)
-    // or a ROLL (side flip, see first_person_flip_is_side). Pitch sign tuned on the headset: forward
-    // somersaults +1, back somersaults -1. Side flip is +1 here and gets rolled to the side by the caller.
+
+    // Per-frame bookkeeping (runs every frame the flip cam is on). The turn-around that triggers a side
+    // flip spins Mario's facing; low-pass that yaw rate so that at the instant the side flip begins we can
+    // read which way he turned - that's the side he flips toward. Also note when a wall-kick leaves a tree.
+    static u32  sPrevAction = 0;
+    static s16  sPrevFaceYaw = 0;
+    static f32  sFaceYawVel = 0.0f;
+    static s16  sSideSign = 1;            // +1 / -1: which way the current side flip leans
+    static bool sWallKickFromPole = false;
+
+    s16 dFace = (s16)(m->faceAngle[1] - sPrevFaceYaw);
+    sPrevFaceYaw = m->faceAngle[1];
+    sFaceYawVel = sFaceYawVel * 0.6f + (f32)dFace * 0.4f;
+
+    if (m->action != sPrevAction) { // action just changed this frame
+        if (m->action == ACT_SIDE_FLIP) {
+            // Sample the turn direction; keep the previous sign if the turn was too small to read cleanly.
+            if (sFaceYawVel >  64.0f) { sSideSign =  1; }
+            else if (sFaceYawVel < -64.0f) { sSideSign = -1; }
+        } else if (m->action == ACT_WALL_KICK_AIR) {
+            sWallKickFromPole = fp_is_pole_action(sPrevAction); // jumped off a tree vs kicked off a wall
+        }
+    }
+    sPrevAction = m->action;
+
     f32 dir;
     switch (m->action) {
-        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward flip (pitch)
+        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward (pitch)
         case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward, star/cap triple jump (pitch)
         case ACT_FLYING_TRIPLE_JUMP:  dir =  1.0f; break; // forward, wing cap triple jump (pitch)
-        case ACT_SIDE_FLIP:           dir =  1.0f; break; // side flip -> ROLL to the side (caller routes it)
         case ACT_FORWARD_ROLLOUT:     dir =  1.0f; break; // forward roll (pitch)
         case ACT_BACKFLIP:            dir = -1.0f; break; // back flip (pitch)
         case ACT_BACKWARD_ROLLOUT:    dir = -1.0f; break; // backward roll (pitch)
+        case ACT_TOP_OF_POLE_JUMP:    dir =  1.0f; break; // handstand jump off a tree top -> forward (pitch)
+        case ACT_GROUND_POUND:    dir =  1.0f; break; // ground-pound spin -> forward (pitch); the straight-down slam anim doesn't advance, so it naturally settles level
+        case ACT_SIDE_FLIP:           dir = (f32)sSideSign; break; // side flip -> directional LEAN (roll)
+        case ACT_WALL_KICK_AIR:
+            if (!sWallKickFromPole) { return 0; }         // ordinary wall kicks don't flip
+            dir = -1.0f; break;                            // kicking off a tree -> back (pitch)
         default:                      return 0;
     }
+
     struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
     if (a->curAnim == NULL || a->curAnim->loopEnd <= 1) { return 0; }
     f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
     if (progress < 0.0f) { progress = 0.0f; }
     if (progress > 1.0f) { progress = 1.0f; }
-    // Smoothstep (3t^2 - 2t^3) so the flip eases in and out instead of the old linear snap.
+
+    if (m->action == ACT_SIDE_FLIP) {
+        // A gentle lean toward the flip side that rises and settles back to level (half sine, 0 -> 1 -> 0),
+        // so it reads as a side flip without a full barrel roll and never fights your control of Mario.
+        f32 lean = sins((s16)(progress * 32768.0f)); // sin(pi * progress)
+        return (s16)(lean * dir * (f32)FIRST_PERSON_SIDE_FLIP_LEAN);
+    }
+
+    // Somersaults: a full eased turn over the animation (smoothstep 3t^2 - 2t^3 to ease in and out).
     f32 eased = progress * progress * (3.0f - 2.0f * progress);
     return (s16)(eased * dir * 65536.0f);
 }

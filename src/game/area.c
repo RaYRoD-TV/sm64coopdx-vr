@@ -460,10 +460,17 @@ void render_game(void) {
             djui_reset_hud_params();
             create_dl_ortho_matrix();
             djui_gfx_displaylist_begin();
-            if (gServerSettings.nametags && !gDjuiInMainMenu) {
-                nametags_render();
+            // Hide HUD hides the behind-HUD layer: nametags AND the Lua HOOK_ON_HUD_RENDER_BEHIND draws -
+            // that's where mods draw the gameplay HUD (B3313's b-roll HUD, character select's lives/stars).
+            // Mod PAUSE menus draw on the FOREGROUND hook (HOOK_ON_HUD_RENDER, in djui.c) which stays ungated,
+            // so they remain visible. The ortho/display-list setup stays outside the gate so nothing downstream
+            // renders against a stale matrix.
+            if (!gMenuHideHud) {
+                if (gServerSettings.nametags && !gDjuiInMainMenu) {
+                    nametags_render();
+                }
+                smlua_call_event_hooks(HOOK_ON_HUD_RENDER_BEHIND, djui_reset_hud_params);
             }
-            smlua_call_event_hooks(HOOK_ON_HUD_RENDER_BEHIND, djui_reset_hud_params);
             djui_gfx_displaylist_end();
         }
         render_hud();

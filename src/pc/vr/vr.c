@@ -50,6 +50,19 @@ static bool sFrameBegun = false; // xrBeginFrame issued, owes an xrEndFrame
 static bool sViewsValid = false; // sViews holds per-eye poses for this frame (xrLocateViews succeeded)
 static bool sPoseTracked = false; // the runtime reports the head pose as actually tracked (not just predicted/zero)
 
+// --- persistent VR settings (vr_settings.txt next to the exe) -----------------
+// Remembers the VR menu state across launches. Declared up here so vr_boot() can load before the preset
+// table is defined further down. Saved debounced (sSettingsFlushIn frames after the last change) so a
+// slider drag doesn't hammer the disk. The two first-person toggles + hide-HUD live on the game side, so
+// they're reached through small accessors instead of pulling the game headers into this file.
+static bool sSettingsDirty   = false;
+static int  sSettingsFlushIn = 0;
+static void vr_settings_load(void);
+static void vr_settings_save(void);
+extern unsigned char gMenuHideHud;                                                      // game/hud.h
+extern bool first_person_get_flip_cam(void);     extern void first_person_set_flip_cam(bool on);      // game/first_person_cam.h
+extern bool first_person_get_interact_cam(void); extern void first_person_set_interact_cam(bool on);
+
 static XrFrameState            sFrameState;
 static uint32_t                sViewCount = 0;
 static XrViewConfigurationView sViewConfigs[2];
@@ -159,6 +172,10 @@ static XrFovf  sRenderFov[2]; // symmetrized fov actually rendered + submitted
 static PFN_xrGetOpenGLGraphicsRequirementsKHR pfnGetGLReq = NULL;
 
 bool vr_is_active(void)      { return sRunning; }
+// Headset actually being worn (session focused). Drops to false the moment you take the headset off (the
+// runtime moves FOCUSED -> VISIBLE), so input that only makes sense in VR (the mode hotkey, mouse capture)
+// can fall back to flat behaviour while the headset is off, even though the session is still running.
+bool vr_is_focused(void)     { return sRunning && sState == XR_SESSION_STATE_FOCUSED; }
 bool vr_first_person_active(void) { return sFirstPerson; }
 int  vr_eye_count(void)      { return (int)sViewCount; }
 int  vr_eye_width(int eye)   { return (eye >= 0 && eye < 2) ? (int)sEye[eye].w : 0; }
@@ -456,6 +473,7 @@ bool vr_headset_present(void) {
 // is guaranteed current. Any failure leaves VR inactive (game keeps rendering flat).
 static void vr_boot(void) {
     printf("[VR] booting OpenXR...\n");
+    vr_settings_load(); // restore the VR menu settings saved last session, before anything renders
 
     // Opt into the cylinder layer (surround sky) if the runtime offers it.
     sHasCylinder = false;
@@ -679,7 +697,7 @@ static const VrPreset sPresets[] = {
     // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax. The
     // nose-down tilt is kept small (~4.5 deg): it's applied in eye space, so a larger tilt leaks into a
     // roll when you tilt your head (the "lopsided" look). The low + close framing carries the look-down.
-    { "Tabletop",     3000.0f,  0.25f, -0.35f, 0.45f, 0.08f, false },
+    { "Diorama",      3000.0f,  0.25f, -0.35f, 0.45f, 0.08f, false },
     { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false },
     { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, 0.00f, true  }, // life-size, eye at Mario's head, full 6DoF
 };
@@ -701,6 +719,7 @@ static void vr_apply_preset(int idx) {
         idx + 1, VR_NUM_PRESETS, sPresets[idx].name,
         sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, (int)sFirstPerson);
     vr_write_tune_file();
+    vr_settings_mark_dirty();
 }
 
 // --- In-game VR menu accessors (used by djui_panel_vr.c) ---------------------
@@ -710,19 +729,37 @@ void  vr_cycle_preset(void)          { vr_apply_preset((sCurrentPreset + 1) % VR
 int   vr_get_preset_count(void)      { return VR_NUM_PRESETS; }
 const char* vr_get_preset_name(int i){ return (i >= 0 && i < VR_NUM_PRESETS) ? sPresets[i].name : ""; }
 float vr_get_menu_dist(void)         { return sMenuDist; }
-void  vr_set_menu_dist(float v)      { sMenuDist = v; }
+void  vr_set_menu_dist(float v)      { sMenuDist = v; vr_settings_mark_dirty(); }
 float vr_get_menu_size(void)         { return sMenuSize; }
-void  vr_set_menu_size(float v)      { sMenuSize = v; }
+void  vr_set_menu_size(float v)      { sMenuSize = v; vr_settings_mark_dirty(); }
 float vr_get_diorama_dist(void)      { return sDioramaDist; }
-void  vr_set_diorama_dist(float v)   { sDioramaDist = v; }
+void  vr_set_diorama_dist(float v)   { sDioramaDist = v; vr_settings_mark_dirty(); }
 float vr_get_diorama_scale(void)     { return sDioramaScale; }
-void  vr_set_diorama_scale(float v)  { sDioramaScale = (v < 30.0f) ? 30.0f : v; }
+void  vr_set_diorama_scale(float v)  { sDioramaScale = (v < 30.0f) ? 30.0f : v; vr_settings_mark_dirty(); }
 float vr_get_stereo(void)            { return sStereoScale; }
-void  vr_set_stereo(float v)         { sStereoScale = (v < 0.0f) ? 0.0f : v; }
+void  vr_set_stereo(float v)         { sStereoScale = (v < 0.0f) ? 0.0f : v; vr_settings_mark_dirty(); }
 float vr_get_diorama_height(void)    { return sDioramaHeight; }
-void  vr_set_diorama_height(float v) { sDioramaHeight = v; }
+void  vr_set_diorama_height(float v) { sDioramaHeight = v; vr_settings_mark_dirty(); }
 float vr_get_head_scale(void)        { return sHeadScale; }
-void  vr_set_head_scale(float v)     { sHeadScale = (v < 0.0f) ? 0.0f : (v > 1.5f ? 1.5f : v); }
+void  vr_set_head_scale(float v)     { sHeadScale = (v < 0.0f) ? 0.0f : (v > 1.5f ? 1.5f : v); vr_settings_mark_dirty(); }
+float vr_get_hud_size(void)          { return sHudSize; }
+void  vr_set_hud_size(float v)       { sHudSize = (v < 0.5f) ? 0.5f : v; vr_settings_mark_dirty(); } // VR HUD panel width (m)
+// Tabletop is preset 0 - the model-on-a-table view that uses the free orbit camera (see camera.c).
+bool  vr_is_tabletop_mode(void)      { return sRunning && sCurrentPreset == 0; }
+
+// The headset's real refresh rate in Hz, taken from the runtime's predicted display period (filled by
+// xrWaitFrame each frame). pc_main uses this to run the interpolation loop at the headset's cadence
+// instead of the desktop monitor's, so exactly one rendered frame is emitted per headset frame.
+// Returns 0 until the runtime reports a usable period, in which case the caller keeps its own default.
+int vr_get_refresh_rate(void) {
+    XrDuration period = sFrameState.predictedDisplayPeriod; // nanoseconds between displayed frames
+    if (period > 0) {
+        double hz = 1.0e9 / (double)period;
+        if (hz >= 30.0 && hz <= 1000.0) { return (int)(hz + 0.5); }
+    }
+    return 0;
+}
+
 void  vr_set_first_person(bool on) {
     if (on) { vr_apply_preset(VR_NUM_PRESETS - 1); }   // the First-person preset
     else if (sFirstPerson) { vr_apply_preset(1); }      // back to Close-up
@@ -738,16 +775,79 @@ void vr_reset_defaults(void) {
     sYawRecenterSet = false;  // re-center the view yaw on the next tracked pose
     sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
     printf("[VR] reset to defaults.\n");
+    vr_settings_mark_dirty();
+}
+
+// Mark the VR settings changed; the file write is debounced in vr_begin_frame so dragging a slider
+// (which fires this every frame) only writes once activity stops.
+void vr_settings_mark_dirty(void) { sSettingsDirty = true; sSettingsFlushIn = 45; }
+
+// Write the current VR menu state to vr_settings.txt next to the exe (simple key=value lines).
+static void vr_settings_save(void) {
+    FILE *f = fopen("vr_settings.txt", "w");
+    if (!f) { return; }
+    fprintf(f,
+        "preset=%d\nscale=%.3f\ndist=%.4f\nheight=%.4f\nstereo=%.4f\nhead=%.4f\n"
+        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\n",
+        sCurrentPreset, sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, sHeadScale,
+        sMenuDist, sMenuSize, sHudSize, sAnticlipEnabled ? 1 : 0,
+        first_person_get_flip_cam() ? 1 : 0, first_person_get_interact_cam() ? 1 : 0,
+        gMenuHideHud ? 1 : 0);
+    fclose(f);
+}
+
+// Read vr_settings.txt and apply it. Missing fields keep their current/default value. The preset INDEX is
+// applied directly (not via vr_apply_preset) so the saved slider tweaks aren't overwritten by the preset's
+// stock values - only the preset-derived first-person flag and view tilt are taken from the table.
+static void vr_settings_load(void) {
+    FILE *f = fopen("vr_settings.txt", "r");
+    if (!f) { return; }
+    int preset   = sCurrentPreset;
+    int anticlip = sAnticlipEnabled ? 1 : 0;
+    int flip     = first_person_get_flip_cam() ? 1 : 0;
+    int interact = first_person_get_interact_cam() ? 1 : 0;
+    int hud      = gMenuHideHud ? 1 : 0;
+    char line[128], key[64];
+    double val;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "%63[^=]=%lf", key, &val) != 2) { continue; }
+        if      (!strcmp(key, "preset"))      { preset         = (int)val; }
+        else if (!strcmp(key, "scale"))       { sDioramaScale  = (float)val; }
+        else if (!strcmp(key, "dist"))        { sDioramaDist   = (float)val; }
+        else if (!strcmp(key, "height"))      { sDioramaHeight = (float)val; }
+        else if (!strcmp(key, "stereo"))      { sStereoScale   = (float)val; }
+        else if (!strcmp(key, "head"))        { sHeadScale     = (float)val; }
+        else if (!strcmp(key, "menudist"))    { sMenuDist      = (float)val; }
+        else if (!strcmp(key, "menusize"))    { sMenuSize      = (float)val; }
+        else if (!strcmp(key, "hudsize"))     { sHudSize       = (float)val; }
+        else if (!strcmp(key, "anticlip"))    { anticlip       = (int)val; }
+        else if (!strcmp(key, "flipcam"))     { flip           = (int)val; }
+        else if (!strcmp(key, "interactcam")) { interact       = (int)val; }
+        else if (!strcmp(key, "hidehud"))     { hud            = (int)val; }
+    }
+    fclose(f);
+    if (preset < 0 || preset >= VR_NUM_PRESETS) { preset = 1; }
+    sCurrentPreset   = preset;
+    sFirstPerson     = sPresets[preset].firstPerson;
+    sDioramaPitchRad = sPresets[preset].pitch;
+    sAnticlipEnabled = (anticlip != 0);
+    first_person_set_flip_cam(flip != 0);
+    first_person_set_interact_cam(interact != 0);
+    gMenuHideHud = (unsigned char)(hud ? 1 : 0);
+    printf("[VR] settings restored: preset=%d scale=%.0f stereo=%.2f head=%.2f anticlip=%d\n",
+        sCurrentPreset, sDioramaScale, sStereoScale, sHeadScale, sAnticlipEnabled ? 1 : 0);
 }
 
 // --- Geometry anti-clip bridge (pc_main does the world conversion + collision) -----------------
 bool  vr_anticlip_is_enabled(void)   { return sAnticlipEnabled; }
-void  vr_anticlip_set_enabled(bool e){ sAnticlipEnabled = e; if (!e) { sAnticlipOffsetM[0]=sAnticlipOffsetM[1]=sAnticlipOffsetM[2]=0.0f; } }
+void  vr_anticlip_set_enabled(bool e){ sAnticlipEnabled = e; if (!e) { sAnticlipOffsetM[0]=sAnticlipOffsetM[1]=sAnticlipOffsetM[2]=0.0f; } vr_settings_mark_dirty(); }
 // Cyclopean eye position in game-camera space (game units). Returns false when there's nothing to
 // resolve this frame (no tracked pose, first-person mode, or anti-clip disabled) - caller should then
 // let the applied offset ease back to zero.
 bool  vr_anticlip_get_head_campos(float out[3]) {
-    if (!sAnticlipEnabled || !sHeadCamPosValid || !sViewsValid) { return false; }
+    // Tabletop (preset 0) handles wall collision with its own smooth camera-distance clamp (bettercamera);
+    // running this world-nudge there too just makes the two fight, so skip it. Close-up still uses it.
+    if (!sAnticlipEnabled || !sHeadCamPosValid || !sViewsValid || sCurrentPreset == 0) { return false; }
     out[0] = sHeadCamPos[0]; out[1] = sHeadCamPos[1]; out[2] = sHeadCamPos[2];
     return true;
 }
@@ -776,12 +876,16 @@ static void vr_poll_tuning_keys(void) {
 
     static bool prevCycle = false;
     bool cyc = ks[SDL_SCANCODE_F10] != 0;
-    if (cyc && !prevCycle) vr_cycle_preset();
+    // Only cycle while the headset is actually being worn - with it off the diorama presets don't apply,
+    // so the hotkey would just shuffle useless modes in the flat view.
+    if (cyc && !prevCycle && sState == XR_SESSION_STATE_FOCUSED) vr_cycle_preset();
     prevCycle = cyc;
 }
 
 void vr_begin_frame(void) {
     if (!sRequested) return;
+    // Debounced write of changed VR settings: flush once the slider/toggle activity settles.
+    if (sSettingsDirty && --sSettingsFlushIn <= 0) { vr_settings_save(); sSettingsDirty = false; }
     if (!sBootTried) { sBootTried = true; vr_boot(); }
     if (sSession == XR_NULL_HANDLE) return;
 
@@ -1076,6 +1180,7 @@ void vr_shutdown(void) {
 #else // !_WIN32 - VR is Windows/WGL-only for now; stub out elsewhere.
 
 bool  vr_is_active(void)     { return false; }
+bool  vr_is_focused(void)    { return false; }
 bool  vr_headset_present(void) { return false; }
 bool  vr_first_person_active(void) { return false; }
 void  vr_set_first_person(bool on) { (void)on; }
@@ -1086,7 +1191,11 @@ float vr_get_diorama_scale(void)     { return 0.0f; } void vr_set_diorama_scale(
 float vr_get_stereo(void)            { return 0.0f; } void vr_set_stereo(float v)        { (void)v; }
 float vr_get_diorama_height(void)    { return 0.0f; } void vr_set_diorama_height(float v){ (void)v; }
 float vr_get_head_scale(void)        { return 0.0f; } void vr_set_head_scale(float v)    { (void)v; }
+int   vr_get_refresh_rate(void)      { return 0; }
+float vr_get_hud_size(void)          { return 0.0f; } void vr_set_hud_size(float v) { (void)v; }
+bool  vr_is_tabletop_mode(void)      { return false; }
 void  vr_reset_defaults(void) {}
+void  vr_settings_mark_dirty(void) {}
 bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enabled(bool e) { (void)e; }
 bool  vr_anticlip_get_head_campos(float out[3]) { (void)out; return false; }
 void  vr_anticlip_set_offset(const float m[3]) { (void)m; }

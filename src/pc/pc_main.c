@@ -280,6 +280,10 @@ static void select_graphics_backend(void) {
 static bool vr_frame_is_nongameplay(void) {
     extern bool gDjuiInMainMenu;        // pc/djui/djui.h
     extern bool djui_panel_is_active(void); // pc/djui/djui_panel.h - any DJUI panel open (player, dynos, pause, options)
+    extern bool djui_panel_is_vr_panel(void);
+    // The VR settings menu stays in the stereo diorama (menu floats as a head-locked overlay) so you can see
+    // diorama slider changes live - overrides the pause/panel checks below, which would force the flat panel.
+    if (djui_panel_is_vr_panel())          return false;
     if (gDjuiInMainMenu)                   return true; // title / main menu / connect / options (3D backdrop)
     if (djui_panel_is_active())            return true; // in-game menus: Player, DynOS, pause, options, etc.
     if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)
@@ -399,6 +403,15 @@ void produce_interpolation_frames_and_delay(void) {
         refreshRate = displayRefreshRate;
     }
 
+    // VR: xrWaitFrame inside vr_begin_frame() is the authoritative pacer. Size the interpolation count
+    // from the headset's real refresh so we emit one rendered frame per headset frame, and drop coopdx's
+    // monitor-locked delay so it can't fight the headset's pacing - that fight is what shows up as judder.
+    if (vr_is_active()) {
+        int hz = vr_get_refresh_rate();
+        if (hz >= 30 && hz <= 1000) { refreshRate = (u32)hz; }
+        shouldDelay = false;
+    }
+
     f64 targetTime = sFrameTimeStart + sFrameTime;
     s32 numFramesToDraw = get_num_frames_to_draw(sFrameTimeStart, refreshRate);
 
@@ -447,7 +460,8 @@ void produce_interpolation_frames_and_delay(void) {
                 // for a single game-logic frame and the VR loop can miss it, so the cycle dropped inputs.
                 static u16 sPrevDpadUp = 0;
                 u16 dpadUp = gPlayer1Controller ? (u16)(gPlayer1Controller->buttonDown & U_JPAD) : 0;
-                if (dpadUp && !sPrevDpadUp && !djui_panel_is_active()) { vr_cycle_preset(); }
+                // Only while the headset is worn - with it off the diorama presets don't apply to the flat view.
+                if (dpadUp && !sPrevDpadUp && !djui_panel_is_active() && vr_is_focused()) { vr_cycle_preset(); }
                 sPrevDpadUp = dpadUp;
             }
             // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
@@ -458,6 +472,8 @@ void produce_interpolation_frames_and_delay(void) {
                 vr_set_flip_roll(first_person_flip_roll_rad());
                 vr_set_flip_side(first_person_flip_is_side(&gMarioStates[0]));
             }
+            // Tabletop: back out of the C-up look-around state so it can't freeze movement in the diorama.
+            { extern void first_person_exit_lookaround_for_tabletop(void); first_person_exit_lookaround_for_tabletop(); }
             if (vr_frame_is_nongameplay()) {
                 // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
                 // no diorama, no 2D/3D split) once into the panel swapchain and submit it as the
@@ -746,6 +762,12 @@ int main(int argc, char *argv[]) {
 #endif
 
     configfile_load();
+
+    // In VR the headset's own frame loop (xrWaitFrame, inside vr_begin_frame) paces every frame. Desktop
+    // -window vsync would add a SECOND pacer locked to the monitor's refresh, and when the monitor and
+    // headset run at different rates the two clocks beat against each other into visible judder in the
+    // headset. Turn the desktop mirror's vsync off up front so only the headset paces the frame.
+    if (vr_is_requested()) { configWindow.vsync = 0; }
 
     legacy_folder_handler();
 

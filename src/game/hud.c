@@ -19,6 +19,7 @@
 #include "hardcoded.h"
 #include "bettercamera.h"
 #include "pc/configfile.h"
+#include "pc/vr/vr.h" // vr_is_active / vr_first_person_active - hide the camera icon in VR diorama modes
 #include "pc/network/network.h"
 #include "pc/utils/misc.h"
 #include "pc/lua/smlua.h"
@@ -552,6 +553,11 @@ void set_hud_camera_status(s16 status) {
  * the camera status called, a defined glyph is rendered.
  */
 void render_hud_camera_status(void) {
+    // In a VR diorama/close-up (tabletop + close-up) the camera-angle toggle is locked to Lakitu - the
+    // Mario cam would spin the diorama - so the camera icon is meaningless there and is hidden. First
+    // -person VR keeps it.
+    if (vr_is_active() && !vr_first_person_active()) { return; }
+
     u8 *(*cameraLUT)[6];
     s32 x;
     s32 y;
@@ -626,7 +632,7 @@ void render_hud(void) {
 
         bool showHud = (!gDjuiInMainMenu && !gOverrideHideHud && !gMenuHideHud);
 
-        if (gCurrentArea != NULL && gCurrentArea->camera != NULL && gCurrentArea->camera->mode == CAMERA_MODE_INSIDE_CANNON) {
+        if (gCurrentArea != NULL && gCurrentArea->camera != NULL && gCurrentArea->camera->mode == CAMERA_MODE_INSIDE_CANNON && showHud) {
             render_hud_cannon_reticle();
         }
 

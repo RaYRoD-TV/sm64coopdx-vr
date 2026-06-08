@@ -55,7 +55,7 @@ plus a Reset to Default button:
 
 ![VR settings panel](VR_Menu_Preview/image2.png)
 
-You can cycle the VR mode (Tabletop / Close-up / First-person) with d-pad up or the F10 key, or pick
+You can cycle the VR mode (Diorama / Close-up / First-person) with d-pad up or the F10 key, or pick
 it from the VR Mode dropdown in the menu.
 
 ## Building from source

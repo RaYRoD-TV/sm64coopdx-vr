@@ -209,7 +209,9 @@ extern s16 gMenuMode;
 static void controller_sdl_read(OSContPad *pad) {
     if (!init_ok) { return; }
 
-    if ((gNewCamera.isMouse || get_first_person_enabled() || gDjuiHudLockMouse) && !is_game_paused() && !gDjuiPanelPauseCreated && !gDjuiInMainMenu && !gDjuiChatBoxFocus && !gDjuiConsoleFocus && (vr_is_active() || gWindowApi->has_focus())) {
+    // Mouse capture (relative mode): in VR only while the headset is actually worn (focused) - taking it
+    // off frees the cursor so you can click the desktop window. Flat play is unchanged (window focus).
+    if ((gNewCamera.isMouse || get_first_person_enabled() || gDjuiHudLockMouse) && !is_game_paused() && !gDjuiPanelPauseCreated && !gDjuiInMainMenu && !gDjuiChatBoxFocus && !gDjuiConsoleFocus && (vr_is_focused() || (!vr_is_active() && gWindowApi->has_focus()))) {
         controller_mouse_enter_relative();
     } else {
         controller_mouse_leave_relative();

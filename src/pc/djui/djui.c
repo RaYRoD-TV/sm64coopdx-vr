@@ -207,6 +207,9 @@ void djui_render(void) {
     // During interpolated frames, copy the generated display list without running the hook again
     if (!sDjuiRendered60fps) {
         Gfx *hookHudRenderStart = gDisplayListHead;
+        // Not gated by Hide HUD: mods draw BOTH gameplay HUD and interactive menus through this hook, and
+        // only the mod knows which is which. Mods gate their own HUD via hud_is_hidden() (which honours the
+        // Hide HUD toggle); their menus (e.g. B3313's custom pause) don't, so they stay visible.
         smlua_call_event_hooks(HOOK_ON_HUD_RENDER, djui_reset_hud_params);
         size_t gfxSize = sizeof(Gfx) * (gDisplayListHead - hookHudRenderStart);
         if (gfxSize > 0) {
