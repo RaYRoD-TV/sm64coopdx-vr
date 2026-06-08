@@ -50,8 +50,8 @@ All the VR settings are in-game. Pause and open the VR button, right after Cheat
 
 ![VR button in the pause menu](VR_Menu_Preview/image1.png)
 
-It has view distance, size and height, stereo depth, head motion, first person, and camera anti-clip,
-plus a Reset to Default button:
+It has the VR mode, diorama distance, size and height, menu and HUD size, stereo depth, head motion,
+the first person toggles, Hide HUD, and camera anti-clip, plus a Reset to Default button:
 
 ![VR settings panel](VR_Menu_Preview/image2.png)
 
