@@ -225,7 +225,7 @@ static void vr_build_eye_matrix(int eye) {
     // Persistent 6DoF damping: scale the head's offset from a captured rest pose so
     // ALL leans/translations are reduced (not just fast jerks). Capture rest after a
     // short warmup so tracking has settled (a frame-1 capture put the eye in the floor).
-    if (eye == 0 && !sHeadRestSet && ++sHeadWarmup >= 15) {
+    if (eye == 0 && !sHeadRestSet && sPoseTracked && ++sHeadWarmup >= 15) {
         sHeadRest[0] = cx; sHeadRest[1] = cy; sHeadRest[2] = cz; sHeadRestSet = true;
         printf("[VR] 6DoF rest captured at (%.2f, %.2f, %.2f)\n", cx, cy, cz);
     }
@@ -593,6 +593,16 @@ static void vr_poll_events(void) {
                 xrEndSession(sSession);
                 sRunning = false;
                 printf("[VR] session stopped.\n");
+            } else if (e->state == XR_SESSION_STATE_VISIBLE ||
+                       e->state == XR_SESSION_STATE_FOCUSED) {
+                // Headset re-donned / session regained the foreground: the rest pose captured before
+                // removal is stale and would drop the damped eye to the wrong height (through the floor).
+                // Clear it so the next warmup re-captures a fresh rest at the current tracked pose.
+                if (sHeadRestSet) {
+                    printf("[VR] session state=%d: re-centering 6DoF rest.\n", (int)e->state);
+                    sHeadRestSet = false;
+                    sHeadWarmup  = 0;
+                }
             }
         }
         ev.type = XR_TYPE_EVENT_DATA_BUFFER; // reset for next poll

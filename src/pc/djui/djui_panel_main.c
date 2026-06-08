@@ -25,6 +25,10 @@ static void djui_panel_main_quit(struct DjuiBase* caller) {
 }
 
 void djui_panel_main_create(struct DjuiBase* caller) {
+    // Route controller input to the menu pad from the moment the main menu starts building, not only
+    // after the panel is fully built - otherwise the first boot frames feed the stick/buttons to the
+    // gameplay pad and the menu reads zero (gamepad appears dead on the title screen).
+    gInteractableOverridePad = true;
     struct DjuiThreePanel* panel = djui_panel_menu_create(configExCoopTheme ? "\\#ff0800\\SM\\#1be700\\64\\#00b3ff\\EX\n\\#ffef00\\COOP" : "", false);
     {
         struct DjuiBase* body = djui_three_panel_get_body(panel);

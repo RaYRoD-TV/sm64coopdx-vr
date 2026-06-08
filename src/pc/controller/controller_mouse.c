@@ -77,14 +77,23 @@ void controller_mouse_read_window(void) {
         POINT p;
         if (GetCursorPos(&p)) {
             HWND hwnd_under = WindowFromPoint(p);
-            if (hwnd_under == game_window || IsChild(game_window, hwnd_under)) {
-                if (ScreenToClient(game_window, &p)) {
-                    mouse_window_x = p.x - gfx_current_dimensions.x_adjust_4by3;
-                    mouse_window_y = p.y;
-                }
+            // In VR the OpenXR compositor is the foreground window, so WindowFromPoint often resolves to
+            // it instead of the game window even when the pointer is visually inside the game window.
+            // That left the desktop mouse stuck at -1000 (unusable) with the headset off. Also accept the
+            // position when it's inside the game window's client rect, and only invalidate when the cursor
+            // is genuinely outside it.
+            POINT client = p;
+            bool inClientRect = false;
+            RECT cr;
+            if (ScreenToClient(game_window, &client) && GetClientRect(game_window, &cr)) {
+                inClientRect = (client.x >= cr.left && client.x < cr.right &&
+                                client.y >= cr.top  && client.y < cr.bottom);
+            }
+            if (hwnd_under == game_window || IsChild(game_window, hwnd_under) || inClientRect) {
+                mouse_window_x = client.x - gfx_current_dimensions.x_adjust_4by3;
+                mouse_window_y = client.y;
             } else {
-                // invalidate the mouse position
-                // so the ui isn't interacted with
+                // cursor is genuinely outside the game window's client area
                 mouse_window_x = -1000;
                 mouse_window_y = -1000;
             }

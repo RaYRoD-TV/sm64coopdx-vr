@@ -78,7 +78,17 @@ static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
 static void vr_panel_showbody_changed(UNUSED struct DjuiBase* caller)  { gFirstPersonCamera.showBody = sShowBody; }
-static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller)   { gFirstPersonCamera.flipCam = sFlipCam; }
+static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
+    gFirstPersonCamera.flipCam = sFlipCam;
+    // Flip Cam only does anything in the VR first-person view (the roll in vr.c gates on it), so turning
+    // it on switches into first-person and syncs the First Person checkbox.
+    if (sFlipCam && vr_is_active() && !vr_first_person_active()) {
+        vr_set_first_person(true);
+        set_first_person_enabled(true);
+        sFp = true;
+        if (cbFp) { djui_base_set_visible(&cbFp->rectValue->base, sFp); }
+    }
+}
 
 static void vr_panel_reset(UNUSED struct DjuiBase* caller) {
     vr_reset_defaults();

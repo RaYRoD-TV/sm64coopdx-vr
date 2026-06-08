@@ -34,6 +34,7 @@
 #include "game/sound_init.h"
 #include "pc/configfile.h"
 #include "pc/network/network.h"
+#include "pc/vr/vr.h"
 #include "pc/lua/smlua_hooks.h"
 #include "pc/djui/djui.h"
 #include "first_person_cam.h"
@@ -9591,8 +9592,13 @@ BAD_RETURN(s32) cutscene_read_message(struct Camera *c) {
             break;
         // Leave the dialog.
         case 1:
-            move_mario_head_c_up(c);
-            update_c_up(c, c->focus, c->pos);
+            // In VR the dialog stays in the stereo diorama view (pc_main keeps it 3D), so the C-up
+            // zoom-to-face would shove the camera into Mario and wreck the miniature framing. Skip it in
+            // VR; the dialog text shows as a head-locked overlay and Mario stays visible in the diorama.
+            if (!vr_is_active()) {
+                move_mario_head_c_up(c);
+                update_c_up(c, c->focus, c->pos);
+            }
 
             // This could cause softlocks. If a message starts one frame after another one closes, the
             // cutscene will never end.
