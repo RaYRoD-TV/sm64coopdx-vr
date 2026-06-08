@@ -50,10 +50,10 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..5beb01a 100644
+index 16ae934..20d868a 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,22 +1,78 @@
+@@ -1,22 +1,76 @@
 -![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
 +# sm64coopdx VR
  
@@ -97,11 +97,9 @@ index 16ae934..5beb01a 100644
  
 -## Community
 -We have an official Discord server open to the public [here](https://discord.gg/TJVKHS4).
-+There's no separate single-player button. The menu only shows Host and Join because this is built on
-+sm64coopdx. To just play on your own: click **Host**, leave Network System on **Direct Connection**
-+(the default), then click **Host** at the bottom. That drops you straight into a normal local game you
-+play by yourself, fully offline. Nobody can join unless you hand out your IP, so you can ignore the port
-+and server fields.
++Just click **Play** on the main menu and you're straight into the game, on your own, fully offline, with
++no server screens. Underneath it's a normal Direct Connection host with the defaults, so co-op still
++works too: someone can join your IP, or use **Host** to set up a session with the usual options.
 +
 +## Controls
 +
@@ -282,10 +280,10 @@ index 0000000..7625268
 +pause
 diff --git a/make_vr_dist.bat b/make_vr_dist.bat
 new file mode 100644
-index 0000000..f1f8946
+index 0000000..9850620
 --- /dev/null
 +++ b/make_vr_dist.bat
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,85 @@
 +@echo off
 +title Package sm64coopdx VR (complete download)
 +REM ===========================================================================
@@ -347,10 +345,9 @@ index 0000000..f1f8946
 +>>"%DIST%\READ_ME_FIRST.txt" echo That is it. Headset connected = VR automatically; no headset = normal flat
 +>>"%DIST%\READ_ME_FIRST.txt" echo game. Force it either way with  --vr  or  --novr .
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
-+>>"%DIST%\READ_ME_FIRST.txt" echo PLAYING SOLO (offline): there is no single-player button - the menu only shows
-+>>"%DIST%\READ_ME_FIRST.txt" echo Host and Join because this is built on sm64coopdx. Just click Host, leave
-+>>"%DIST%\READ_ME_FIRST.txt" echo Network System on Direct Connection (the default), then click Host at the
-+>>"%DIST%\READ_ME_FIRST.txt" echo bottom. That starts a normal game you play by yourself, fully offline.
++>>"%DIST%\READ_ME_FIRST.txt" echo PLAYING SOLO (offline): just click Play on the main menu - you go straight
++>>"%DIST%\READ_ME_FIRST.txt" echo into the game on your own, fully offline, with no server screens. (Host is
++>>"%DIST%\READ_ME_FIRST.txt" echo still there if you want to set up a co-op session.)
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
 +>>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
@@ -1039,6 +1036,57 @@ index dd752c9..cbb3920 100644
  struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel* threePanel, struct DjuiBase* defaultElementBase);
  void djui_panel_back(void);
  void djui_panel_update(void);
+diff --git a/src/pc/djui/djui_panel_host.c b/src/pc/djui/djui_panel_host.c
+index ea67951..42d957a 100644
+--- a/src/pc/djui/djui_panel_host.c
++++ b/src/pc/djui/djui_panel_host.c
+@@ -64,6 +64,17 @@ static void djui_panel_host_password_text_change(UNUSED struct DjuiBase* caller)
+ #endif
+ 
+ extern void djui_panel_do_host(bool reconnecting, bool playSound);
++
++// One-click "Play": start a local game immediately with the saved defaults, skipping the host panel
++// and the Direct-Connection firewall/port-forwarding popup. You play solo by default; co-op still works
++// through Host (or by sharing your IP) since this is a normal Direct Connection host underneath.
++void djui_panel_play(UNUSED struct DjuiBase* caller) {
++    configNetworkSystem = NS_SOCKET; // Direct Connection (local)
++    if (configHostPort == 0) { configHostPort = DEFAULT_PORT; }
++    network_reset_reconnect_and_rehost();
++    djui_panel_do_host(false, true);
++}
++
+ static void djui_panel_host_do_host(struct DjuiBase* caller) {
+     if (!djui_panel_host_port_valid()) {
+         djui_interactable_set_input_focus(&sInputboxPort->base);
+diff --git a/src/pc/djui/djui_panel_host.h b/src/pc/djui/djui_panel_host.h
+index 43fe9c2..7ac0623 100644
+--- a/src/pc/djui/djui_panel_host.h
++++ b/src/pc/djui/djui_panel_host.h
+@@ -2,3 +2,4 @@
+ #include "djui.h"
+ 
+ void djui_panel_host_create(struct DjuiBase* caller);
++void djui_panel_play(struct DjuiBase* caller); // one-click start: local game with defaults, no panel/popup
+diff --git a/src/pc/djui/djui_panel_main.c b/src/pc/djui/djui_panel_main.c
+index 0a849bb..b3e3830 100644
+--- a/src/pc/djui/djui_panel_main.c
++++ b/src/pc/djui/djui_panel_main.c
+@@ -41,9 +41,14 @@ void djui_panel_main_create(struct DjuiBase* caller) {
+                 djui_base_set_location(&logo->base, 0, -30);
+             }
+ 
++            // One-click start for people who just want to play (no server screens). Starts a local
++            // game with the defaults; Host below is still there for configuring a multiplayer session.
++            struct DjuiButton* buttonPlay = djui_button_create(body, "Play", DJUI_BUTTON_STYLE_NORMAL, djui_panel_play);
++            if (!configExCoopTheme) { djui_base_set_location(&buttonPlay->base, 0, -30); }
++            djui_cursor_input_controlled_center(&buttonPlay->base);
++
+             struct DjuiButton* button1 = djui_button_create(body, DLANG(MAIN, HOST), DJUI_BUTTON_STYLE_NORMAL, djui_panel_host_create);
+             if (!configExCoopTheme) { djui_base_set_location(&button1->base, 0, -30); }
+-            djui_cursor_input_controlled_center(&button1->base);
+ 
+             struct DjuiButton* button2 = djui_button_create(body, DLANG(MAIN, JOIN), DJUI_BUTTON_STYLE_NORMAL, djui_panel_join_create);
+             if (!configExCoopTheme) { djui_base_set_location(&button2->base, 0, -30); }
 diff --git a/src/pc/djui/djui_panel_pause.c b/src/pc/djui/djui_panel_pause.c
 index 6a4c2ef..b772b91 100644
 --- a/src/pc/djui/djui_panel_pause.c

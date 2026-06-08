@@ -59,10 +59,9 @@ echo Writing READ_ME_FIRST.txt ...
 >>"%DIST%\READ_ME_FIRST.txt" echo That is it. Headset connected = VR automatically; no headset = normal flat
 >>"%DIST%\READ_ME_FIRST.txt" echo game. Force it either way with  --vr  or  --novr .
 >>"%DIST%\READ_ME_FIRST.txt" echo.
->>"%DIST%\READ_ME_FIRST.txt" echo PLAYING SOLO (offline): there is no single-player button - the menu only shows
->>"%DIST%\READ_ME_FIRST.txt" echo Host and Join because this is built on sm64coopdx. Just click Host, leave
->>"%DIST%\READ_ME_FIRST.txt" echo Network System on Direct Connection (the default), then click Host at the
->>"%DIST%\READ_ME_FIRST.txt" echo bottom. That starts a normal game you play by yourself, fully offline.
+>>"%DIST%\READ_ME_FIRST.txt" echo PLAYING SOLO (offline): just click Play on the main menu - you go straight
+>>"%DIST%\READ_ME_FIRST.txt" echo into the game on your own, fully offline, with no server screens. (Host is
+>>"%DIST%\READ_ME_FIRST.txt" echo still there if you want to set up a co-op session.)
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
 >>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are

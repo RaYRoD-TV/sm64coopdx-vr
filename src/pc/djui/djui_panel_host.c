@@ -64,6 +64,17 @@ static void djui_panel_host_password_text_change(UNUSED struct DjuiBase* caller)
 #endif
 
 extern void djui_panel_do_host(bool reconnecting, bool playSound);
+
+// One-click "Play": start a local game immediately with the saved defaults, skipping the host panel
+// and the Direct-Connection firewall/port-forwarding popup. You play solo by default; co-op still works
+// through Host (or by sharing your IP) since this is a normal Direct Connection host underneath.
+void djui_panel_play(UNUSED struct DjuiBase* caller) {
+    configNetworkSystem = NS_SOCKET; // Direct Connection (local)
+    if (configHostPort == 0) { configHostPort = DEFAULT_PORT; }
+    network_reset_reconnect_and_rehost();
+    djui_panel_do_host(false, true);
+}
+
 static void djui_panel_host_do_host(struct DjuiBase* caller) {
     if (!djui_panel_host_port_valid()) {
         djui_interactable_set_input_focus(&sInputboxPort->base);

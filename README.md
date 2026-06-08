@@ -28,10 +28,9 @@ into your existing folder.
 
 ## Playing solo (offline)
 
-There's no separate single-player button. The menu only shows Host and Join because this is built on
-sm64coopdx. To just play on your own: click **Host**, leave Network System on **Direct Connection**
-(the default), then click **Host** at the bottom. That drops you straight into a normal local game you
-play by yourself, fully offline
+Just click **Play** on the main menu and you're straight into the game, on your own, fully offline, with
+no server screens. Underneath it's a normal Direct Connection host with the defaults, so co-op still
+works too: someone can join your IP, or use **Host** to set up a session with the usual options.
 
 ## Controls
 
