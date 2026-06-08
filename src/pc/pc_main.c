@@ -371,12 +371,18 @@ static void vr_anticlip_resolve(void) {
     // and hard-bound the total so a bad read can never throw the world far.
     for (int i = 0; i < 3; i++) {
         float d = target[i] - applied[i];
-        float maxStep = active ? 0.02f : 0.04f; // 2 cm/frame easing in, faster ease-out when inactive
+        // Escape geometry FAST so a quick camera move (close-up swinging low, a jump) can't dip the view
+        // through a floor before the correction catches up; relax back to neutral slowly so the world never
+        // lurches. "Escaping" = the correction is growing in magnitude (pushing the eye further out).
+        float at = (target[i]  < 0.0f) ? -target[i]  : target[i];
+        float aa = (applied[i] < 0.0f) ? -applied[i] : applied[i];
+        bool escaping = (at > aa);
+        float maxStep = !active ? 0.04f : (escaping ? 0.10f : 0.02f);
         if (d >  maxStep) d =  maxStep;
         if (d < -maxStep) d = -maxStep;
         applied[i] += d;
-        if (applied[i] >  0.60f) applied[i] =  0.60f;
-        if (applied[i] < -0.60f) applied[i] = -0.60f;
+        if (applied[i] >  0.80f) applied[i] =  0.80f; // a bit more headroom for deep floor dips in close-up
+        if (applied[i] < -0.80f) applied[i] = -0.80f;
     }
     vr_anticlip_set_offset(applied);
 

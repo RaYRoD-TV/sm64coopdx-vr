@@ -15,6 +15,8 @@ VR
 - Added a HUD Size slider to scale the in-headset HUD.
 - Frames are now paced by the headset itself instead of the desktop monitor's
   refresh, which helps smoothness when the two run at different rates.
+- Close-up mode no longer dips the camera through the floor on quick camera
+  moves.
 
 First person
 - The flip cam now rolls the side flip toward the side it actually flips, and
