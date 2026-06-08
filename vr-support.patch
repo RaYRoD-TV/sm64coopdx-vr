@@ -50,7 +50,7 @@ index 9405b2b..4ff4b9a 100644
    BACKEND_LDFLAGS += -lGLESv2
  else ifeq ($(TARGET_RK3588),1)
 diff --git a/README.md b/README.md
-index 16ae934..745ea78 100644
+index 16ae934..5e6a453 100644
 --- a/README.md
 +++ b/README.md
 @@ -1,22 +1,70 @@
@@ -63,7 +63,7 @@ index 16ae934..745ea78 100644
 +want on its own.
  
 -Feel free to report bugs or contribute to the project.
-+Tested on Quest 3 and Pimax, but it should run with any PCVR / OpenXR runtime.
++Tested on Quest 3 and Pimax Dream Air, but it should run with any PCVR / OpenXR runtime.
  
 -## Initial Goal (Accomplished)
 -Create a mod for the PC port where multiple people can play together online.
@@ -1507,7 +1507,7 @@ index f4200a3..9c4d8a4 100644
  void gfx_display_frame(void);
  void gfx_end_frame(void);
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7..240bf75 100644
+index 0d4f9f7..21c812e 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -1552,7 +1552,7 @@ index 0d4f9f7..240bf75 100644
      switch (backend) {
          case GAPI_GL:
              gWindowApi = &gfx_sdl;
-@@ -256,6 +270,121 @@ static void select_graphics_backend(void) {
+@@ -256,6 +270,123 @@ static void select_graphics_backend(void) {
      }
  }
  
@@ -1571,7 +1571,9 @@ index 0d4f9f7..240bf75 100644
 +    if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)
 +    if (gCurrCreditsEntry != NULL)         return true; // credits / ending
 +    if (gCurrDemoInput != NULL)            return true; // attract-mode demo
-+    if (get_dialog_id() != DIALOG_NONE)    return true; // dialog box open
++    // NOTE: dialog boxes (talking to characters, reading signs) intentionally stay in the stereo VR
++    // view - the world keeps rendering in 3D and the text box shows as the head-locked HUD overlay, so
++    // a conversation no longer yanks you out to the flat panel. (was: get_dialog_id() != DIALOG_NONE)
 +    if (gMenuMode != -1)                   return true; // pause star-grid / course-complete (2D fullscreen)
 +    if (sCurrPlayMode == PLAY_MODE_PAUSED) return true; // pause (frozen world -> flat panel for consistency)
 +    return false;                                       // active gameplay
@@ -1674,7 +1676,7 @@ index 0d4f9f7..240bf75 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -290,10 +419,73 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +421,73 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -1748,7 +1750,7 @@ index 0d4f9f7..240bf75 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +644,7 @@ void game_deinit(void) {
+@@ -452,6 +646,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -1756,7 +1758,7 @@ index 0d4f9f7..240bf75 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +697,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +699,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  

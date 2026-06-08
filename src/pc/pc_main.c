@@ -285,7 +285,9 @@ static bool vr_frame_is_nongameplay(void) {
     if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)
     if (gCurrCreditsEntry != NULL)         return true; // credits / ending
     if (gCurrDemoInput != NULL)            return true; // attract-mode demo
-    if (get_dialog_id() != DIALOG_NONE)    return true; // dialog box open
+    // NOTE: dialog boxes (talking to characters, reading signs) intentionally stay in the stereo VR
+    // view - the world keeps rendering in 3D and the text box shows as the head-locked HUD overlay, so
+    // a conversation no longer yanks you out to the flat panel. (was: get_dialog_id() != DIALOG_NONE)
     if (gMenuMode != -1)                   return true; // pause star-grid / course-complete (2D fullscreen)
     if (sCurrPlayMode == PLAY_MODE_PAUSED) return true; // pause (frozen world -> flat panel for consistency)
     return false;                                       // active gameplay
