@@ -44,6 +44,7 @@
 #include "pc/network/socket/socket.h"
 #include "bettercamera.h"
 #include "first_person_cam.h"
+#include "pc/vr/vr.h" // vr_is_active / vr_get_head_move / vr_get_look_yaw - move where you look (VR first-person)
 
 #define MAX_HANG_PREVENTION 64
 
@@ -1525,7 +1526,10 @@ void update_mario_joystick_inputs(struct MarioState *m) {
         if (gLakituState.mode != CAMERA_MODE_NEWCAM) {
             m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + m->area->camera->yaw;
         } else if (get_first_person_enabled()) {
-            m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + gLakituState.yaw;
+            // VR first-person "Move Where You Look" (opt-in): steer relative to where the head is looking by
+            // adding the head yaw offset to the camera yaw. Off / flatscreen: lookOff is 0 (unchanged).
+            s16 lookOff = (vr_is_active() && vr_get_head_move()) ? (s16)vr_get_look_yaw() : 0;
+            m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + gLakituState.yaw + lookOff;
         } else {
             m->intendedYaw = atan2s(-controller->stickY, controller->stickX) - gNewCamera.yaw + 0x4000;
         }

@@ -112,6 +112,7 @@ static float sClipMargin    = 0.30f;   // anti-clip: keep the diorama this far f
 // offset (meters) that nudges the whole shrunk world off any wall/floor/ceiling the eye pokes into.
 // First-person is excluded (moving the eye off the head causes sickness).
 static bool  sAnticlipEnabled    = true;
+static bool  sHeadMoveEnabled    = false; // opt-in: in VR first-person, move/turn toward where the head looks
 static float sAnticlipOffsetM[3] = { 0.0f, 0.0f, 0.0f }; // applied anchor offset (smoothed, in vr_build_eye_matrix)
 static float sHeadCamPos[3]      = { 0.0f, 0.0f, 0.0f }; // cyclopean eye in game-camera space (game units)
 static bool  sHeadCamPosValid    = false;
@@ -166,6 +167,7 @@ static float   sHeadRest[3] = {0,0,0};
 static bool    sHeadRestSet = false;
 static int     sHeadWarmup  = 0;     // frames before capturing rest (lets tracking settle so we don't grab a bad pose)
 static float   sHeadRestYawQy = 0.0f, sHeadRestYawQw = 1.0f; // INVERSE yaw captured at rest, to recenter the view on the user's initial gaze
+static float   sHeadRestYawRad = 0.0f; // HMD yaw (radians) at rest, so head-direction movement is relative to your starting gaze
 static bool    sYawRecenterSet = false;
 static XrPosef sRenderPose[2];
 static XrFovf  sRenderFov[2]; // symmetrized fov actually rendered + submitted
@@ -264,6 +266,7 @@ static void vr_build_eye_matrix(int eye) {
     // short warmup so tracking has settled (a frame-1 capture put the eye in the floor).
     if (eye == 0 && !sHeadRestSet && sPoseTracked && ++sHeadWarmup >= 15) {
         sHeadRest[0] = cx; sHeadRest[1] = cy; sHeadRest[2] = cz; sHeadRestSet = true;
+        sHeadRestYawRad = vr_head_yaw_rad(); // baseline gaze yaw for head-direction movement
         printf("[VR] 6DoF rest captured at (%.2f, %.2f, %.2f)\n", cx, cy, cz);
         // Snapshot the INVERSE of the initial head yaw so the view recenters on the user's starting gaze:
         // the diorama ends up dead ahead no matter which way they were physically facing at launch.
@@ -782,6 +785,7 @@ void vr_reset_defaults(void) {
     sYawRecenterSet = false;  // re-center the view yaw on the next tracked pose
     sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
     sWorldScale = 1.0f;
+    sHeadMoveEnabled = false;
     printf("[VR] reset to defaults.\n");
     vr_settings_mark_dirty();
 }
@@ -796,11 +800,11 @@ static void vr_settings_save(void) {
     if (!f) { return; }
     fprintf(f,
         "preset=%d\nscale=%.3f\ndist=%.4f\nheight=%.4f\nstereo=%.4f\nhead=%.4f\n"
-        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nworldscale=%.3f\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\n",
+        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nworldscale=%.3f\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\nheadmove=%d\n",
         sCurrentPreset, sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, sHeadScale,
         sMenuDist, sMenuSize, sHudSize, sWorldScale, sAnticlipEnabled ? 1 : 0,
         first_person_get_flip_cam() ? 1 : 0, first_person_get_interact_cam() ? 1 : 0,
-        gMenuHideHud ? 1 : 0);
+        gMenuHideHud ? 1 : 0, sHeadMoveEnabled ? 1 : 0);
     fclose(f);
 }
 
@@ -815,6 +819,7 @@ static void vr_settings_load(void) {
     int flip     = first_person_get_flip_cam() ? 1 : 0;
     int interact = first_person_get_interact_cam() ? 1 : 0;
     int hud      = gMenuHideHud ? 1 : 0;
+    int headmove = sHeadMoveEnabled ? 1 : 0;
     char line[128], key[64];
     double val;
     while (fgets(line, sizeof(line), f)) {
@@ -833,6 +838,7 @@ static void vr_settings_load(void) {
         else if (!strcmp(key, "flipcam"))     { flip           = (int)val; }
         else if (!strcmp(key, "interactcam")) { interact       = (int)val; }
         else if (!strcmp(key, "hidehud"))     { hud            = (int)val; }
+        else if (!strcmp(key, "headmove"))    { headmove       = (int)val; }
     }
     fclose(f);
     if (preset < 0 || preset >= VR_NUM_PRESETS) { preset = 1; }
@@ -840,6 +846,7 @@ static void vr_settings_load(void) {
     sFirstPerson     = sPresets[preset].firstPerson;
     sDioramaPitchRad = sPresets[preset].pitch;
     sAnticlipEnabled = (anticlip != 0);
+    sHeadMoveEnabled = (headmove != 0);
     first_person_set_flip_cam(flip != 0);
     first_person_set_interact_cam(interact != 0);
     gMenuHideHud = (unsigned char)(hud ? 1 : 0);
@@ -850,6 +857,12 @@ static void vr_settings_load(void) {
 // --- Geometry anti-clip bridge (pc_main does the world conversion + collision) -----------------
 bool  vr_anticlip_is_enabled(void)   { return sAnticlipEnabled; }
 void  vr_anticlip_set_enabled(bool e){ sAnticlipEnabled = e; if (!e) { sAnticlipOffsetM[0]=sAnticlipOffsetM[1]=sAnticlipOffsetM[2]=0.0f; } vr_settings_mark_dirty(); }
+
+// --- Head-direction movement (VR first-person, opt-in): walk/turn toward where the head looks ---------
+// Head yaw offset from the rest gaze, as an SM64 s16 angle. mario.c adds this to the move reference yaw.
+int   vr_get_look_yaw(void)          { float r = vr_head_yaw_rad() - sHeadRestYawRad; return (short)(r * (32768.0f / 3.14159265358979f)); }
+bool  vr_get_head_move(void)         { return sHeadMoveEnabled; }
+void  vr_set_head_move(bool e)       { sHeadMoveEnabled = e; vr_settings_mark_dirty(); }
 // Cyclopean eye position in game-camera space (game units). Returns false when there's nothing to
 // resolve this frame (no tracked pose, first-person mode, or anti-clip disabled) - caller should then
 // let the applied offset ease back to zero.
@@ -1203,6 +1216,8 @@ float vr_get_head_scale(void)        { return 0.0f; } void vr_set_head_scale(flo
 int   vr_get_refresh_rate(void)      { return 0; }
 float vr_get_hud_size(void)          { return 0.0f; } void vr_set_hud_size(float v) { (void)v; }
 float vr_get_world_scale(void)       { return 1.0f; } void vr_set_world_scale(float v) { (void)v; }
+int   vr_get_look_yaw(void)          { return 0; }
+bool  vr_get_head_move(void)         { return false; } void vr_set_head_move(bool e) { (void)e; }
 bool  vr_is_tabletop_mode(void)      { return false; }
 void  vr_reset_defaults(void) {}
 void  vr_settings_mark_dirty(void) {}

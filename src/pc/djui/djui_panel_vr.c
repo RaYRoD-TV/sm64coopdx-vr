@@ -24,6 +24,7 @@ static bool sFlipCam;           // first person: roll the view with Mario's flip
 static bool sInteractCam;       // first person: ease back to show Mario when interacting/attacking
 static bool sAntiClip;          // geometry anti-clip (diorama/close-up): keep the eye out of walls/floors
 static bool sHideHud;           // hide the on-screen HUD (lives/stars/power meter)
+static bool sHeadMove;          // first person: move/turn toward where the head looks (opt-in)
 static unsigned int sMenuDistI; // menu distance, tenths of a meter (10..80 = 1.0..8.0 m)
 static unsigned int sMenuSizeI; // menu width, tenths of a meter (20..120 = 2.0..12.0 m)
 static unsigned int sHudSizeI;  // gameplay HUD width, tenths of a meter (10..60 = 1.0..6.0 m)
@@ -35,7 +36,7 @@ static unsigned int sWorldScaleI; // first-person world scale, hundredths (25..4
 static unsigned int sHeadI;     // 6DoF head-motion amount, hundredths (0..150 = 0.0..1.5; lower = steadier)
 
 // Widget handles, so Reset to Default can refresh what's on screen.
-static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip, *cbHideHud;
+static struct DjuiCheckbox *cbFp, *cbFlipCam, *cbInteractCam, *cbAntiClip, *cbHideHud, *cbHeadMove;
 static struct DjuiSelectionbox *sbMode;
 static struct DjuiSlider   *slMenuDist, *slMenuSize, *slHudSize, *slDioDist, *slDioSize, *slDioHeight, *slStereo, *slWorldScale, *slHead;
 
@@ -53,6 +54,7 @@ static void vr_panel_seed_proxies(void) {
     sInteractCam = gFirstPersonCamera.interactCam;
     sAntiClip   = vr_anticlip_is_enabled();
     sHideHud    = (gMenuHideHud != 0);
+    sHeadMove   = vr_get_head_move();
     sMenuDistI  = clampu(vr_get_menu_dist()    * 10.0f,            10, 80);
     sMenuSizeI  = clampu(vr_get_menu_size()    * 10.0f,            20, 120);
     sHudSizeI   = clampu(vr_get_hud_size()     * 10.0f,            10, 60);
@@ -72,6 +74,7 @@ static void vr_panel_refresh_widgets(void) {
     if (cbInteractCam) { djui_base_set_visible(&cbInteractCam->rectValue->base, sInteractCam); }
     if (cbAntiClip) { djui_base_set_visible(&cbAntiClip->rectValue->base, sAntiClip); }
     if (cbHideHud)  { djui_base_set_visible(&cbHideHud->rectValue->base,  sHideHud); }
+    if (cbHeadMove) { djui_base_set_visible(&cbHeadMove->rectValue->base, sHeadMove); }
     if (slMenuDist)  { djui_slider_update_value(&slMenuDist->base); }
     if (slMenuSize)  { djui_slider_update_value(&slMenuSize->base); }
     if (slHudSize)   { djui_slider_update_value(&slHudSize->base); }
@@ -101,6 +104,7 @@ static void vr_panel_stereo_changed(UNUSED struct DjuiBase* caller)    { vr_set_
 static void vr_panel_world_scale_changed(UNUSED struct DjuiBase* caller) { vr_set_world_scale((float)sWorldScaleI / 100.0f); }
 static void vr_panel_head_changed(UNUSED struct DjuiBase* caller)      { vr_set_head_scale((float)sHeadI / 100.0f); }
 static void vr_panel_anticlip_changed(UNUSED struct DjuiBase* caller)  { vr_anticlip_set_enabled(sAntiClip); }
+static void vr_panel_headmove_changed(UNUSED struct DjuiBase* caller)  { vr_set_head_move(sHeadMove); }
 static void vr_panel_hidehud_changed(UNUSED struct DjuiBase* caller)   { gMenuHideHud = sHideHud ? 1 : 0; vr_settings_mark_dirty(); }
 static void vr_panel_interactcam_changed(UNUSED struct DjuiBase* caller){ gFirstPersonCamera.interactCam = sInteractCam; vr_settings_mark_dirty(); }
 static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
@@ -129,7 +133,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
     vr_panel_seed_proxies();
     // Clear handles first; sliders below only exist when VR is running, so a stale pointer from a
     // previous open must not be reused.
-    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = cbHideHud = NULL;
+    cbFp = cbFlipCam = cbInteractCam = cbAntiClip = cbHideHud = cbHeadMove = NULL;
     sbMode = NULL;
     slMenuDist = slMenuSize = slHudSize = slDioDist = slDioSize = slDioHeight = slStereo = slWorldScale = slHead = NULL;
 
@@ -159,6 +163,7 @@ void djui_panel_vr_create(struct DjuiBase* caller) {
             slStereo    = djui_slider_create(body, "Stereo Depth",     &sStereoI,    0,  200,  vr_panel_stereo_changed);
             slWorldScale = djui_slider_create(body, "World Scale (FP)", &sWorldScaleI, 25, 400, vr_panel_world_scale_changed);
             slHead      = djui_slider_create(body, "Head Motion",      &sHeadI,      0,  150,  vr_panel_head_changed);
+            cbHeadMove  = djui_checkbox_create(body, "Move Where You Look (FP)", &sHeadMove, vr_panel_headmove_changed);
             cbAntiClip  = djui_checkbox_create(body, "Camera Anti-Clip", &sAntiClip, vr_panel_anticlip_changed);
         }
 

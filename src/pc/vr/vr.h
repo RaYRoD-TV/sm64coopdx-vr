@@ -40,6 +40,8 @@ float vr_get_head_scale(void);   void vr_set_head_scale(float v);   // 6DoF head
 int   vr_get_refresh_rate(void);                                    // headset refresh in Hz (0 until the runtime reports it)
 float vr_get_hud_size(void);     void vr_set_hud_size(float v);     // VR gameplay HUD panel width (meters)
 float vr_get_world_scale(void);  void vr_set_world_scale(float v);  // first-person world scale (1.0=default, bigger=world feels bigger)
+int   vr_get_look_yaw(void);                                        // VR first-person head look yaw offset (SM64 s16 angle units)
+bool  vr_get_head_move(void);    void vr_set_head_move(bool e);     // opt-in: in VR first-person, move/turn toward where the head looks
 bool  vr_is_tabletop_mode(void);                                    // true in the Tabletop preset (free orbit camera)
 void  vr_reset_defaults(void);   // reset every VR tunable to launch defaults
 void  vr_settings_mark_dirty(void); // note a VR menu change so it gets saved to vr_settings.txt (debounced)

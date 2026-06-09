@@ -31,6 +31,8 @@ First person
   facing the wall.
 - In Diorama mode the C-up look-around no longer engages, so it cannot freeze
   your movement.
+- Optional Move Where You Look: Mario walks and turns toward where you are
+  looking. Off by default, with a toggle in the VR menu.
 
 Hide HUD
 - Hide HUD now hides the gameplay HUD, including mod-drawn HUDs, while leaving
