@@ -1,17 +1,24 @@
-// VR motion controllers (Quest Touch, Index) as a game controller.
+// VR motion controllers (Quest Touch, Index, WMR, Vive) as a game controller.
 //
-// vr.c polls the OpenXR action state once per frame; this backend presents that state in the
-// same virtual keyspace as the SDL gamepad. That one decision buys everything: the default
-// binds give a sensible layout out of the box, the in-game rebind menu captures Quest buttons
-// like any gamepad button, and the DJUI menus navigate exactly as they do with a gamepad.
+// vr.c polls the OpenXR action state once per frame; this backend feeds it into the game.
 //
-// Default feel (with the stock binds):
-//   left stick    move            right stick   camera (C buttons)
-//   A             jump (A)        B             punch (B)
-//   left trigger  Z (crouch)      right trigger R
-//   either grip   grab / throw (acts as B)
-//   menu button   Start (pause)   left stick click   Z
+// The button layout is FIXED: VR buttons map straight to N64 buttons and are deliberately NOT
+// routed through the gamepad bindings. Gamepad binds carry personal flat-screen muscle memory
+// (a punch rebound onto another face button, for example) and inheriting that scrambles the VR
+// controllers in ways that look like wrong-hand bugs. The pad is what gameplay and the DJUI
+// menus read, so everything below works the same for every config:
+//
+//   left stick    move                 right stick   camera (C buttons; analog look is scaled
+//                                                    down, see VR_CAM_STICK_SCALE)
+//   A             jump (A)             B             punch (B)
+//   left trigger  crouch (Z)           right trigger R (and next page in menus)
+//   either grip   grab / throw (B)     left trigger  also previous page while a menu is up (L)
+//   menu button   pause (Start)        left stick click   Z
 //   right stick click  d-pad up (cycles the VR view mode)
+//
+// Key events still go to DJUI with each control's physical gamepad-button identity (A=0, B=1,
+// X=2, ...), which keeps chat/console/player-list shortcuts and bind capture working; menu
+// select/back themselves run off the pad's A/B, so they follow the fixed layout above.
 //
 // When VR is off (or the headset is doffed) this backend reports nothing and releases
 // anything it was holding, so buttons can't stick down across focus changes.
@@ -25,16 +32,22 @@
 
 #include "controller_api.h"
 #include "controller_vr.h"
-#include "controller_sdl.h" // VK_BASE_SDL_GAMEPAD / VK_BASE_SDL_MOUSE: we share the SDL gamepad keyspace
+#include "controller_sdl.h" // VK_BASE_SDL_GAMEPAD: the keyspace used for DJUI key events
 #include "pc/configfile.h"
 #include "pc/vr/vr.h"
 #include "pc/djui/djui.h"
+#include "pc/djui/djui_panel.h"
 #include "pc/djui/djui_panel_pause.h"
 
-#define MAX_VRBINDS   32
 #define MAX_VRBUTTONS 32 // virtual button indices, including the trigger virtual keys (0x1A/0x1B)
 
-// Virtual button indices in the SDL gamepad keyspace (SDL_GameControllerButton values).
+// How much of the camera stick's deflection reaches the analog look (free cam, first person).
+// 1.0 was too fast in the headset. Only the analog path is scaled; the C-button thresholds
+// still trip at the same physical deflection.
+#define VR_CAM_STICK_SCALE 0.55f
+
+// Virtual key indices in the SDL gamepad keyspace (SDL_GameControllerButton values), used for
+// the DJUI key events and bind capture only - the gameplay mapping is the pad table below.
 #define VBTN_A          0
 #define VBTN_B          1
 #define VBTN_X          2
@@ -42,78 +55,52 @@
 #define VBTN_START      6
 #define VBTN_LEFTSTICK  7
 #define VBTN_RIGHTSTICK 8
-#define VBTN_DPAD_UP    11
+#define VBTN_LSHOULDER  9
+#define VBTN_RSHOULDER  10
 #define VBTN_LTRIGGER   (VK_LTRIGGER - VK_BASE_SDL_GAMEPAD)
 #define VBTN_RTRIGGER   (VK_RTRIGGER - VK_BASE_SDL_GAMEPAD)
 
-// Physical control -> virtual gamepad button. The right stick click lands on d-pad up so it
-// cycles the VR view mode through the existing shortcut. Both grips act as B: in SM64 the grab
-// IS the B interaction, so squeezing near a box or a bob-omb picks it up and squeezing again
-// throws it. Two physical controls mapping to one virtual button just OR together below.
-static const struct { unsigned vrMask; int vbtn; } sVrButtonMap[] = {
+// Physical control -> N64 pad buttons, fixed. Both grips act as B: in SM64 the grab IS the B
+// interaction, so squeezing near a box or a bob-omb picks it up and squeezing again throws it.
+// The right stick click lands on d-pad up so it cycles the VR view mode through the existing
+// shortcut. Several controls mapping to the same button just OR together.
+static const struct { unsigned vrMask; u32 n64Mask; } sVrPadMap[] = {
+    { VR_BTN_A,        A_BUTTON },
+    { VR_BTN_B,        B_BUTTON },
+    { VR_BTN_X,        X_BUTTON },
+    { VR_BTN_Y,        Y_BUTTON },
+    { VR_BTN_MENU,     START_BUTTON },
+    { VR_BTN_LSTICK,   Z_TRIG },
+    { VR_BTN_RSTICK,   U_JPAD },
+    { VR_BTN_LTRIGGER, Z_TRIG },
+    { VR_BTN_RTRIGGER, R_TRIG },
+    { VR_BTN_LGRIP,    B_BUTTON },
+    { VR_BTN_RGRIP,    B_BUTTON },
+};
+
+// Physical control -> virtual key for DJUI events and bind capture (physical identity).
+static const struct { unsigned vrMask; int vk; } sVrKeyMap[] = {
     { VR_BTN_A,        VBTN_A },
     { VR_BTN_B,        VBTN_B },
     { VR_BTN_X,        VBTN_X },
     { VR_BTN_Y,        VBTN_Y },
     { VR_BTN_MENU,     VBTN_START },
     { VR_BTN_LSTICK,   VBTN_LEFTSTICK },
-    { VR_BTN_RSTICK,   VBTN_DPAD_UP },
+    { VR_BTN_RSTICK,   VBTN_RIGHTSTICK },
     { VR_BTN_LTRIGGER, VBTN_LTRIGGER },
     { VR_BTN_RTRIGGER, VBTN_RTRIGGER },
-    { VR_BTN_LGRIP,    VBTN_B },
-    { VR_BTN_RGRIP,    VBTN_B },
+    { VR_BTN_LGRIP,    VBTN_LSHOULDER },
+    { VR_BTN_RGRIP,    VBTN_RSHOULDER },
 };
 
-static u32  num_vr_binds = 0;
-static u32  vr_binds[MAX_VRBINDS][2] = { 0 };
 static bool vr_buttons[MAX_VRBUTTONS] = { false };
 static u32  last_vrbutton = VK_INVALID;
 
-// Gamepad-range binds only (the mouse subrange belongs to the mouse device).
-static inline void vr_add_binds(const u32 mask, const u32 *btns) {
-    for (u32 i = 0; i < MAX_BINDS; ++i) {
-        if (btns[i] >= VK_BASE_SDL_GAMEPAD && btns[i] < VK_BASE_SDL_MOUSE && num_vr_binds < MAX_VRBINDS) {
-            u32 idx = btns[i] - VK_BASE_SDL_GAMEPAD;
-            if (idx < MAX_VRBUTTONS) {
-                vr_binds[num_vr_binds][0] = idx;
-                vr_binds[num_vr_binds][1] = mask;
-                ++num_vr_binds;
-            }
-        }
-    }
-}
-
-static void controller_vr_bind(void) {
-    memset(vr_binds, 0, sizeof(vr_binds));
-    num_vr_binds = 0;
-
-    vr_add_binds(A_BUTTON,     configKeyA);
-    vr_add_binds(B_BUTTON,     configKeyB);
-    vr_add_binds(X_BUTTON,     configKeyX);
-    vr_add_binds(Y_BUTTON,     configKeyY);
-    vr_add_binds(Z_TRIG,       configKeyZ);
-    vr_add_binds(STICK_UP,     configKeyStickUp);
-    vr_add_binds(STICK_LEFT,   configKeyStickLeft);
-    vr_add_binds(STICK_DOWN,   configKeyStickDown);
-    vr_add_binds(STICK_RIGHT,  configKeyStickRight);
-    vr_add_binds(U_CBUTTONS,   configKeyCUp);
-    vr_add_binds(L_CBUTTONS,   configKeyCLeft);
-    vr_add_binds(D_CBUTTONS,   configKeyCDown);
-    vr_add_binds(R_CBUTTONS,   configKeyCRight);
-    vr_add_binds(L_TRIG,       configKeyL);
-    vr_add_binds(R_TRIG,       configKeyR);
-    vr_add_binds(START_BUTTON, configKeyStart);
-    vr_add_binds(U_JPAD,       configKeyDUp);
-    vr_add_binds(D_JPAD,       configKeyDDown);
-    vr_add_binds(L_JPAD,       configKeyDLeft);
-    vr_add_binds(R_JPAD,       configKeyDRight);
-}
-
 static void controller_vr_init(void) {
-    controller_vr_bind();
+    // Nothing to set up: vr.c boots OpenXR lazily and the mapping is fixed.
 }
 
-// Same press/release plumbing as the SDL backend so the DJUI menus see VR buttons as gamepad keys.
+// Same press/release plumbing as the SDL backend so DJUI sees VR buttons as gamepad keys.
 static void vr_update_button(const int i, const bool held) {
     const bool pressed   = !vr_buttons[i] && held;
     const bool unpressed = vr_buttons[i] && !held;
@@ -157,8 +144,8 @@ static void controller_vr_read(OSContPad *pad) {
     // Run the edge detection even when inactive so anything held when the headset comes off
     // (or the session drops) gets its key-up instead of sticking down.
     bool held[MAX_VRBUTTONS] = { false };
-    for (size_t i = 0; i < sizeof(sVrButtonMap) / sizeof(sVrButtonMap[0]); i++) {
-        if (vr & sVrButtonMap[i].vrMask) { held[sVrButtonMap[i].vbtn] = true; }
+    for (size_t i = 0; i < sizeof(sVrKeyMap) / sizeof(sVrKeyMap[0]); i++) {
+        if (vr & sVrKeyMap[i].vrMask) { held[sVrKeyMap[i].vk] = true; }
     }
     for (int i = 0; i < MAX_VRBUTTONS; i++) {
         if (vr_buttons[i] || held[i]) { vr_update_button(i, held[i]); }
@@ -167,20 +154,14 @@ static void controller_vr_read(OSContPad *pad) {
     if (!active) { return; }
 
     u32 buttons_down = 0;
-    for (u32 i = 0; i < num_vr_binds; ++i) {
-        if (vr_buttons[vr_binds[i][0]]) {
-            buttons_down |= vr_binds[i][1];
-        }
+    for (size_t i = 0; i < sizeof(sVrPadMap) / sizeof(sVrPadMap[0]); i++) {
+        if (vr & sVrPadMap[i].vrMask) { buttons_down |= sVrPadMap[i].n64Mask; }
     }
+    // The paginated menus flip pages with L/R, and R already comes from the right trigger.
+    // While a panel is up, the left trigger also reads as L; in gameplay it stays Z only
+    // (a constant L would make some camera modes recenter on every crouch).
+    if ((vr & VR_BTN_LTRIGGER) && djui_panel_is_active()) { buttons_down |= L_TRIG; }
     pad->button |= buttons_down;
-
-    // Stick directions bound as buttons, same as the SDL backend.
-    const u32 xstick = buttons_down & STICK_XMASK;
-    const u32 ystick = buttons_down & STICK_YMASK;
-    if (xstick == STICK_LEFT)       { pad->stick_x = -128; }
-    else if (xstick == STICK_RIGHT) { pad->stick_x =  127; }
-    if (ystick == STICK_DOWN)       { pad->stick_y = -128; }
-    else if (ystick == STICK_UP)    { pad->stick_y =  127; }
 
     // Thumbsticks arrive as -1..1 with +y up; convert to the SDL int16 convention (+y down)
     // so the shared deadzone math and C-button thresholds behave identically. The camera X is
@@ -194,13 +175,22 @@ static void controller_vr_read(OSContPad *pad) {
     int16_t rightx = (int16_t)(rs[0] * -32767.0f);
     int16_t righty = (int16_t)(rs[1] * -32767.0f);
 
+    // C buttons trip at the raw deflection, unaffected by the analog look scale.
     if (rightx < -0x4000) { pad->button |= L_CBUTTONS; }
     if (rightx >  0x4000) { pad->button |= R_CBUTTONS; }
     if (righty < -0x4000) { pad->button |= U_CBUTTONS; }
     if (righty >  0x4000) { pad->button |= D_CBUTTONS; }
 
     vr_update_analog_stick(&pad->stick_x, &pad->stick_y, leftx, lefty);
-    vr_update_analog_stick(&pad->ext_stick_x, &pad->ext_stick_y, rightx, righty);
+
+    // Analog look: run the shared deadzone math at full range (so the deadzone feel matches the
+    // movement stick), then scale the result down to slow the camera.
+    s8 camx = 0, camy = 0;
+    vr_update_analog_stick(&camx, &camy, rightx, righty);
+    if (camx || camy) {
+        pad->ext_stick_x = (s8)(camx * VR_CAM_STICK_SCALE);
+        pad->ext_stick_y = (s8)(camy * VR_CAM_STICK_SCALE);
+    }
 }
 
 static u32 controller_vr_rawkey(void) {
@@ -225,12 +215,12 @@ static void controller_vr_shutdown(void) {
 }
 
 struct ControllerAPI controller_vr = {
-    VK_BASE_SDL_GAMEPAD, // shares the SDL gamepad keyspace: same binds, same rebind UI
+    VK_BASE_SDL_GAMEPAD, // DJUI key events use the gamepad keyspace; the pad mapping is fixed
     controller_vr_init,
     controller_vr_read,
     controller_vr_rawkey,
     controller_vr_rumble_play,
     controller_vr_rumble_stop,
-    controller_vr_bind,
+    NULL, // reconfig: nothing to rebuild, the VR layout doesn't follow the gamepad binds
     controller_vr_shutdown
 };

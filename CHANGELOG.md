@@ -15,12 +15,14 @@ VR controllers
   Touch Plus profile is used when the runtime offers it, instead of
   letting the runtime translate the older Touch layout (which could put
   buttons on the wrong controller).
+- The VR layout is fixed and independent of your gamepad bindings. Before,
+  a punch rebound onto a different gamepad button would quietly move punch
+  onto the wrong VR controller and break grabbing.
 - The camera stick's left/right direction matches what you expect in VR
-  (the flat-gamepad direction read inverted there).
-- The controllers appear to the game as a regular gamepad, so the existing
-  control bindings apply and you can rebind everything in Options the same
-  way as any controller.
-- Menus navigate with the stick and A/B, like a gamepad.
+  (the flat-gamepad direction read inverted there), and the analog look
+  speed is reduced so turning is easier to control.
+- Menus navigate with the stick and A/B, like a gamepad, and the triggers
+  flip pages in the paginated menus.
 - Rumble plays through both controllers.
 - Triggers and grips only register past 60% travel and release under 40%,
   so a finger resting on the trigger does not cause inputs.

@@ -27,17 +27,22 @@ DS4, Xbox) or mouse and keyboard. Head tracking drives the view either way.
 
 ### VR controllers
 
-The motion controllers are read through OpenXR actions and presented to the game as a standard
-gamepad in the same virtual keyspace as the SDL backend. That means the stock gamepad bindings give
-the default layout, the rebind menu in Options captures VR buttons the same way it captures gamepad
-buttons, and the in-game menus navigate with stick plus A/B like a gamepad. Defaults: left stick
-moves, right stick is the camera (its left/right is flipped relative to a flat gamepad, because in
-VR the world rotates around you rather than a camera panning on a screen), A jumps, B punches, left
-trigger is Z, either grip grabs and throws (it acts as B, which is SM64's grab interaction), the
-left controller's menu button pauses, and clicking the right stick cycles the VR mode (it acts as
-d-pad up). Triggers and grips register past 60% travel and release under 40%, so a resting finger
-can't flicker an input. Rumble goes to both hands. Everything releases cleanly when the headset
-comes off, and a gamepad can stay connected at the same time; inputs merge.
+The motion controllers are read through OpenXR actions and feed the game's pad directly with a
+fixed layout: left stick moves, right stick is the camera (its left/right is flipped relative to a
+flat gamepad, because in VR the world rotates around you rather than a camera panning on a screen,
+and the analog look runs at reduced speed - VR_CAM_STICK_SCALE in controller_vr.c), A jumps, B
+punches, left trigger is Z, either grip grabs and throws (it acts as B, which is SM64's grab
+interaction), the left controller's menu button pauses, and clicking the right stick cycles the VR
+mode (it acts as d-pad up). In menus the triggers flip pages.
+
+The layout is deliberately NOT routed through the gamepad bindings. Gamepad binds carry personal
+flat-screen habits (punch moved onto a different face button, for instance) and inheriting them
+puts VR buttons on the wrong controller while looking exactly like a binding bug. The DJUI menus
+navigate off the pad's A/B, so they follow the same fixed layout.
+
+Triggers and grips register past 60% travel and release under 40%, so a resting finger can't
+flicker an input. Rumble goes to both hands. Everything releases cleanly when the headset comes
+off, and a gamepad can stay connected at the same time; inputs merge.
 
 Bindings are suggested for these interaction profiles: Quest Touch, Quest 3 / Quest Pro Touch Plus
 (used when the runtime offers it, so buttons land on the right hands without the runtime translating

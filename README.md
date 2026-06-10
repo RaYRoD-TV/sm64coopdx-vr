@@ -47,8 +47,8 @@ In VR your head moves the view on top of whichever input you use.
 
 ### VR controller layout
 
-The VR controllers show up to the game as a regular gamepad, so the default layout below comes from
-the normal coopdx bindings and you can change it in Options like any controller:
+The layout is fixed, so it works the same on every install regardless of how your gamepad is
+bound (gamepad rebinds in Options apply to gamepads, not to the VR controllers):
 
 | Control | Does |
 | --- | --- |
@@ -63,9 +63,9 @@ the normal coopdx bindings and you can change it in Options like any controller:
 | Right stick click | Cycle the VR mode |
 | X / Y | X / Y |
 
-Menus work with it too: move the cursor with a stick, A to select, B to go back. Rumble plays
-through the controllers. The Oculus button on the right controller belongs to the system and can't
-be bound.
+Menus work with it too: move the cursor with a stick, A to select, B to go back, and the triggers
+flip pages in the paginated menus. Rumble plays through the controllers. The Oculus button on the
+right controller belongs to the system and can't be bound.
 
 ### VR menu
 
