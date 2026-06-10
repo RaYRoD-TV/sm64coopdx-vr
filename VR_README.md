@@ -32,8 +32,9 @@ fixed layout: left stick moves, right stick is the camera (its left/right is fli
 flat gamepad, because in VR the world rotates around you rather than a camera panning on a screen,
 and the analog look runs at reduced speed - VR_CAM_STICK_SCALE in controller_vr.c), A jumps, B
 punches, left trigger is Z, either grip grabs and throws (it acts as B, which is SM64's grab
-interaction), the left controller's menu button pauses, and clicking the right stick cycles the VR
-mode (it acts as d-pad up). In menus the triggers flip pages.
+interaction, but only while something grabbable is in reach or already carried, so an empty squeeze
+never punches air), the left controller's menu button pauses, and clicking the right stick cycles
+the VR mode (it acts as d-pad up). In menus the triggers flip pages.
 
 The layout is deliberately NOT routed through the gamepad bindings. Gamepad binds carry personal
 flat-screen habits (punch moved onto a different face button, for instance) and inheriting them

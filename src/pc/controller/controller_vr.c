@@ -12,7 +12,8 @@
 //                                                    down, see VR_CAM_STICK_SCALE)
 //   A             jump (A)             B             punch (B)
 //   left trigger  crouch (Z)           right trigger R (and next page in menus)
-//   either grip   grab / throw (B)     left trigger  also previous page while a menu is up (L)
+//   either grip   grab / throw (B, only while something grabbable is in reach - never punches air)
+//   left trigger  also previous page while a menu is up (L)
 //   menu button   pause (Start)        left stick click   Z
 //   right stick click  d-pad up (cycles the VR view mode)
 //
@@ -39,6 +40,13 @@
 #include "pc/djui/djui_panel.h"
 #include "pc/djui/djui_panel_pause.h"
 
+#include "object_fields.h"
+#include "object_constants.h"
+#include "game/interaction.h"          // INTERACT_GRABBABLE
+#include "game/level_update.h"         // gMarioStates
+#include "game/object_helpers.h"       // dist_between_objects
+#include "game/object_list_processor.h" // gObjectLists + the ObjectList enum
+
 #define MAX_VRBUTTONS 32 // virtual button indices, including the trigger virtual keys (0x1A/0x1B)
 
 // How much of the camera stick's deflection reaches the analog look (free cam, first person).
@@ -60,10 +68,9 @@
 #define VBTN_LTRIGGER   (VK_LTRIGGER - VK_BASE_SDL_GAMEPAD)
 #define VBTN_RTRIGGER   (VK_RTRIGGER - VK_BASE_SDL_GAMEPAD)
 
-// Physical control -> N64 pad buttons, fixed. Both grips act as B: in SM64 the grab IS the B
-// interaction, so squeezing near a box or a bob-omb picks it up and squeezing again throws it.
-// The right stick click lands on d-pad up so it cycles the VR view mode through the existing
-// shortcut. Several controls mapping to the same button just OR together.
+// Physical control -> N64 pad buttons, fixed. The right stick click lands on d-pad up so it
+// cycles the VR view mode through the existing shortcut. The grips are handled separately in
+// controller_vr_read: they grab and throw (B), but only when something is actually in reach.
 static const struct { unsigned vrMask; u32 n64Mask; } sVrPadMap[] = {
     { VR_BTN_A,        A_BUTTON },
     { VR_BTN_B,        B_BUTTON },
@@ -74,8 +81,6 @@ static const struct { unsigned vrMask; u32 n64Mask; } sVrPadMap[] = {
     { VR_BTN_RSTICK,   U_JPAD },
     { VR_BTN_LTRIGGER, Z_TRIG },
     { VR_BTN_RTRIGGER, R_TRIG },
-    { VR_BTN_LGRIP,    B_BUTTON },
-    { VR_BTN_RGRIP,    B_BUTTON },
 };
 
 // Physical control -> virtual key for DJUI events and bind capture (physical identity).
@@ -95,6 +100,31 @@ static const struct { unsigned vrMask; int vk; } sVrKeyMap[] = {
 
 static bool vr_buttons[MAX_VRBUTTONS] = { false };
 static u32  last_vrbutton = VK_INVALID;
+
+// In SM64 grabbing IS the B interaction (a punch that connects with a grabbable object), so the
+// grips only feed B when it would read as a grab: while Mario already carries something (so the
+// next squeeze throws or places it), or when a tangible grabbable is within arm's reach. An
+// empty squeeze in open space does nothing instead of punching air.
+static bool vr_grip_can_grab(void) {
+    struct MarioState *m = &gMarioStates[0];
+    if (!m->marioObj) { return false; }
+    if (m->heldObj) { return true; }
+    static const enum ObjectList grabLists[] = {
+        OBJ_LIST_GENACTOR, OBJ_LIST_DESTRUCTIVE, OBJ_LIST_PUSHABLE, OBJ_LIST_DEFAULT
+    };
+    for (size_t i = 0; i < sizeof(grabLists) / sizeof(grabLists[0]); i++) {
+        struct ObjectNode *head = &gObjectLists[grabLists[i]];
+        for (struct ObjectNode *node = head->next; node != head; node = node->next) {
+            struct Object *o = (struct Object *) node;
+            if (o->activeFlags == ACTIVE_FLAG_DEACTIVATED) { continue; }
+            if (o->oInteractType != INTERACT_GRABBABLE) { continue; }
+            if (o->oIntangibleTimer != 0) { continue; }
+            if (fabsf(o->oPosY - m->pos[1]) > 200.0f + o->hitboxHeight) { continue; }
+            if (dist_between_objects(m->marioObj, o) < 180.0f + o->hitboxRadius) { return true; }
+        }
+    }
+    return false;
+}
 
 static void controller_vr_init(void) {
     // Nothing to set up: vr.c boots OpenXR lazily and the mapping is fixed.
@@ -157,6 +187,9 @@ static void controller_vr_read(OSContPad *pad) {
     for (size_t i = 0; i < sizeof(sVrPadMap) / sizeof(sVrPadMap[0]); i++) {
         if (vr & sVrPadMap[i].vrMask) { buttons_down |= sVrPadMap[i].n64Mask; }
     }
+    // Grips: grab and throw only. Holding a squeeze while walking up to something grabs it the
+    // moment it comes into reach (the B press edge fires when the gate opens).
+    if ((vr & (VR_BTN_LGRIP | VR_BTN_RGRIP)) && vr_grip_can_grab()) { buttons_down |= B_BUTTON; }
     // The paginated menus flip pages with L/R, and R already comes from the right trigger.
     // While a panel is up, the left trigger also reads as L; in gameplay it stays Z only
     // (a constant L would make some camera modes recenter on every crouch).

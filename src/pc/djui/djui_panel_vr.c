@@ -17,9 +17,10 @@ static char* sVrModeChoices[] = { "Diorama", "Third-person", "First-person", "Th
 
 // In-game VR settings. DJUI sliders are integer-valued, so each one uses a small proxy that scales
 // to/from the VR module's float tunables. Values apply live as you drag, and you can see the current
-// value on each slider. "Reset to Default" puts everything back to the launch defaults AND refreshes
-// the on-screen widgets (DJUI only redraws a slider/checkbox when its value is changed through the
-// widget, so after a reset we have to nudge each one to redraw - otherwise the handles look stuck).
+// value on each slider. "Reset to Default" resets the CURRENT view mode's settings to that mode's
+// stock values (the mode itself stays; other modes keep their tweaks) AND refreshes the on-screen
+// widgets (DJUI only redraws a slider/checkbox when its value is changed through the widget, so
+// after a reset we have to nudge each one to redraw - otherwise the handles look stuck).
 
 static bool sFp;                // first person on/off (flatscreen toggle)
 static unsigned int sVrMode;    // VR mode index: 0=Diorama, 1=Third-person, 2=First-person, 3=Theater
@@ -150,7 +151,9 @@ static void vr_panel_flipcam_changed(UNUSED struct DjuiBase* caller) {
 
 static void vr_panel_reset(UNUSED struct DjuiBase* caller) {
     vr_reset_defaults();
-    set_first_person_enabled(false);
+    // Resetting keeps the current view mode, so the game-side first-person camera follows the
+    // mode instead of being forced off (resetting while in First-person stays first-person).
+    set_first_person_enabled(vr_first_person_active());
     vr_panel_seed_proxies();   // pull the defaults back into the proxies
     vr_panel_refresh_widgets(); // and redraw the sliders/checkboxes so they don't look stuck
 }

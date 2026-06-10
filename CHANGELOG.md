@@ -11,6 +11,11 @@ VR controllers
   B punches, left trigger crouches (Z), squeezing either grip grabs and
   throws objects, the left menu button pauses, and clicking the right
   stick cycles the VR mode.
+- The grips only act when something grabbable is in reach or already in
+  Mario's hands, so squeezing them in open space does not punch.
+- Reset to Default in the VR menu now resets the settings of the view mode
+  you are in, instead of switching you to another mode. Other modes keep
+  their tweaks.
 - On Quest 3 the buttons land on the hands they belong to: the native
   Touch Plus profile is used when the runtime offers it, instead of
   letting the runtime translate the older Touch layout (which could put

@@ -1123,16 +1123,20 @@ static int sCurrentPreset = 1; // launch default = Third-person
 typedef struct { float scale, dist, height, stereo, head; } VrPresetTunables;
 static VrPresetTunables sPresetUser[VR_NUM_PRESETS];
 static bool sPresetUserSeeded = false;
+static float vr_preset_stock_head(int i) {
+    return sPresets[i].firstPerson ? 1.0f : 0.4f; // life-size wants true 1:1 head motion; diorama wants damping
+}
+static void vr_preset_user_reset_slot(int i) {
+    sPresetUser[i].scale  = sPresets[i].scale;
+    sPresetUser[i].dist   = sPresets[i].dist;
+    sPresetUser[i].height = sPresets[i].height;
+    sPresetUser[i].stereo = sPresets[i].stereo;
+    sPresetUser[i].head   = vr_preset_stock_head(i);
+}
 static void vr_preset_user_seed(void) {
     if (sPresetUserSeeded) { return; }
     sPresetUserSeeded = true;
-    for (int i = 0; i < VR_NUM_PRESETS; i++) {
-        sPresetUser[i].scale  = sPresets[i].scale;
-        sPresetUser[i].dist   = sPresets[i].dist;
-        sPresetUser[i].height = sPresets[i].height;
-        sPresetUser[i].stereo = sPresets[i].stereo;
-        sPresetUser[i].head   = sPresets[i].firstPerson ? 1.0f : 0.4f; // life-size wants true 1:1 head motion; diorama wants damping
-    }
+    for (int i = 0; i < VR_NUM_PRESETS; i++) { vr_preset_user_reset_slot(i); }
 }
 
 static void vr_apply_preset(int idx) {
@@ -1222,10 +1226,13 @@ void  vr_set_first_person(bool on) {
         vr_apply_preset(1); // back to Third-person
     }
 }
-// Reset every VR tunable to its launch default (Third-person preset + default panel placement).
+// Reset the ACTIVE view mode's settings to that mode's stock values, plus the shared panel/HUD
+// placement. The mode itself stays (resetting while in Diorama keeps you in Diorama), and the
+// other modes keep their remembered tweaks.
 void vr_reset_defaults(void) {
-    sPresetUserSeeded = false;  // forget every preset's remembered tweaks -> back to the stock table
-    vr_apply_preset(1);     // Third-person: resets scale/dist/height/stereo/first-person/head-damping
+    vr_preset_user_seed();
+    vr_preset_user_reset_slot(sCurrentPreset); // forget only this mode's tweaks
+    vr_apply_preset(sCurrentPreset);           // re-apply the freshly reset slot; the mode is unchanged
     sMenuDist = 3.0f;
     sMenuSize = 4.8f;
     sHudSize  = 2.4f;
@@ -1239,7 +1246,7 @@ void vr_reset_defaults(void) {
     sAnticlipOffsetM[0] = sAnticlipOffsetM[1] = sAnticlipOffsetM[2] = 0.0f;
     sWorldScale = 1.0f;
     sHeadMoveEnabled = false;
-    printf("[VR] reset to defaults.\n");
+    printf("[VR] reset %s to its defaults.\n", sPresets[sCurrentPreset].name);
     vr_settings_mark_dirty();
 }
 

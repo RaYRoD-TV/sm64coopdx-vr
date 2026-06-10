@@ -58,7 +58,7 @@ bound (gamepad rebinds in Options apply to gamepads, not to the VR controllers):
 | B | Punch (B) |
 | Left trigger | Crouch / ground pound (Z) |
 | Right trigger | R |
-| Grips | Grab and throw objects (acts as B) |
+| Grips | Grab and throw objects (only when something is in reach) |
 | Menu button (left controller) | Pause (Start) |
 | Right stick click | Cycle the VR mode |
 | X / Y | X / Y |
