@@ -189,11 +189,23 @@ static void first_person_camera_update(void) {
     // Ease-back: when interacting (a dialog is open) or attacking, smoothly pull the camera back and up
     // so you see Mario do it, then ease back into first-person. Keeps you embodied but lets you watch
     // yourself act. Ease out is slower than ease in so rapid punches don't snap the camera around.
+    // Sliding (butt/stomach/dive/crouch/slide-kick slides) is a MOVING attack: easing the camera back while
+    // you slide along the ground reads as the world sliding out from under you in first-person, so suppress
+    // the pull-back for slides and dives. Stationary attacks (punches/kicks) and dialog still ease back.
+    bool isSlideOrDive = (m->action & ACT_FLAG_BUTT_OR_STOMACH_SLIDE) != 0
+                      || (m->action & ACT_FLAG_DIVING) != 0
+                      || ((m->action & ACT_FLAG_MOVING) != 0 && (m->action & ACT_FLAG_ATTACKING) != 0);
     bool wantPull = gFirstPersonCamera.interactCam
-                 && (get_dialog_id() != DIALOG_NONE || (m->action & ACT_FLAG_ATTACKING) != 0);
+                 && (get_dialog_id() != DIALOG_NONE
+                     || ((m->action & ACT_FLAG_ATTACKING) != 0 && !isSlideOrDive));
     f32 pTarget = wantPull ? 1.0f : 0.0f;
+    // Ease-out: the old 0.06 rate took ~4 seconds to settle, so after closing a sign/dialog the view
+    // visibly trailed behind ("stuck at the sign post"). Return faster in general, and the moment the
+    // player is actually moving again snap back quickly - control regained means the show is over.
+    f32 easeOutRate = 0.10f;
+    if (!wantPull && ((m->action & ACT_FLAG_MOVING) || m->intendedMag > 0.5f)) { easeOutRate = 0.25f; }
     gFirstPersonCamera.easeBack += (pTarget - gFirstPersonCamera.easeBack)
-                                 * ((pTarget > gFirstPersonCamera.easeBack) ? 0.12f : 0.06f);
+                                 * ((pTarget > gFirstPersonCamera.easeBack) ? 0.12f : easeOutRate);
 
     if (gFirstPersonCamera.easeBack > 0.001f) {
         Vec3f look = { fpFocus[0] - fpPos[0], fpFocus[1] - fpPos[1], fpFocus[2] - fpPos[2] };

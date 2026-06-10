@@ -55,8 +55,9 @@ the first person toggles, Hide HUD, and camera anti-clip, plus a Reset to Defaul
 
 ![VR settings panel](VR_Menu_Preview/image2.png)
 
-You can cycle the VR mode (Diorama / Close-up / First-person) with d-pad up or the F10 key, or pick
-it from the VR Mode dropdown in the menu.
+You can cycle the VR mode (Diorama / Third-person / First-person) with d-pad up or the F10 key, or
+pick it from the VR Mode dropdown in the menu. Each mode remembers the settings you give it, and
+everything in the menu is saved between launches.
 
 ## Building from source
 

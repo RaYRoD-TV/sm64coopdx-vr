@@ -45,6 +45,8 @@ static XrSpace        sLocalSpace = XR_NULL_HANDLE; // world-locked reference sp
 static XrSessionState sState      = XR_SESSION_STATE_UNKNOWN;
 
 static bool sBootTried  = false; // boot attempted (success or fail) - don't retry every frame
+static int  sBootRetryIn = 0;    // frames until the next boot retry (headset-not-ready is transient: keep trying)
+static bool sBootRetrying = false; // a retry attempt (suppress the per-attempt boot chatter; success still prints)
 static bool sRunning    = false; // session is between xrBeginSession/xrEndSession
 static bool sFrameBegun = false; // xrBeginFrame issued, owes an xrEndFrame
 static bool sViewsValid = false; // sViews holds per-eye poses for this frame (xrLocateViews succeeded)
@@ -57,6 +59,7 @@ static bool sPoseTracked = false; // the runtime reports the head pose as actual
 // they're reached through small accessors instead of pulling the game headers into this file.
 static bool sSettingsDirty   = false;
 static int  sSettingsFlushIn = 0;
+static bool sSettingsLoaded  = false; // vr_settings.txt was read this session (gates the quit-time flush)
 static void vr_settings_load(void);
 static void vr_settings_save(void);
 extern unsigned char gMenuHideHud;                                                      // game/hud.h
@@ -100,8 +103,8 @@ static bool        sHasEquirect2 = false; // runtime supports the equirect2 laye
 // The game world (camera space) is shrunk and anchored in front of the seated
 // viewer; you see it stereoscopically and can lean around it. Tuned by feel.
 static float sDioramaScale  = 1200.0f; // game units per meter (larger = smaller diorama)
-static float sDioramaDist   = -0.17f;  // meters the anchor sits in front (-Z); default = Close-up preset
-static float sDioramaHeight = 0.0f;    // meters above LOCAL origin (~eye height); default = Close-up preset
+static float sDioramaDist   = -0.17f;  // meters the anchor sits in front (-Z); default = Third-person preset
+static float sDioramaHeight = 0.0f;    // meters above LOCAL origin (~eye height); default = Third-person preset
 static float sDioramaPitchRad = 0.0f;  // constant nose-down view tilt for diorama/close-up (rad); per-preset, 0 = level
 static float sClipMargin    = 0.30f;   // anti-clip: keep the diorama this far from the head (backs off on lean-in)
 // (eye-space clip planes are computed per-frame from sDioramaScale so a bigger
@@ -134,6 +137,13 @@ static float sHudSize     = 2.4f;       // HUD panel width in meters (height fol
 // menu's real background fills the view instead of a small transparent quad in a black void.
 static float sMenuDist    = 3.0f;       // menu panel distance (head-locked, -Z in VIEW); pushed back from 2.0
 static float sMenuSize    = 4.8f;       // menu panel width in meters (~2x HUD; raise to overfill the FOV)
+static float sTheaterDist = 4.0f;       // Theater screen distance (meters) - sit back from a big screen
+static float sTheaterSize = 9.0f;       // Theater screen width (meters) - cinema-sized; the flat game plays on it
+static int   sTheaterBg = 0;            // Theater backdrop: 0=Black, 1=Panoramic image, 2=3D Model (see VrTheaterBg)
+static GLuint sBgTex = 0;               // user panorama (theater_bg.png) uploaded once
+static int   sBgW = 0, sBgH = 0;
+static bool  sBgLoadTried = false;      // attempted the PNG load (so a miss isn't retried every frame)
+static bool  sBackdropReady = false;    // sOverlay was acquired+blitted THIS frame (gate the backdrop layer on this, NOT the shared sOverlayReady)
 
 // True first-person: enables coopdx's first-person camera (game camera at Mario's head) and renders the
 // world life-size at 1:1 instead of the shrunk diorama. Free-look: the headset looks around freely, the
@@ -303,13 +313,21 @@ static void vr_build_eye_matrix(int eye) {
 
     float A[4][4] = {{0}};
     float invS = 1.0f / sDioramaScale;
-    // First-person World Scale: magnify the world in the eye transform so a bigger scale makes the world
-    // feel bigger (you feel smaller). Head motion stays 1:1 (no sickness) and the stereo scales with it,
-    // because A scales the whole eye view. Diorama/close-up are untouched (sFirstPerson is false there).
-    if (sFirstPerson) { invS *= sWorldScale; }
+    // First-person World Scale. A uniform geometry scale (multiplying invS) is PERSPECTIVE-INVARIANT: a
+    // proportionally-scaled world viewed from a proportionally-scaled eye projects to the identical image, so
+    // it looked like nothing happened (only a faint stereo shift). Instead we change how big the world FEELS
+    // by shifting your eye height as if you were a different SIZE: worldScale > 1 lowers the eye so the world
+    // towers over you (feels bigger / you feel small); < 1 raises it so the world shrinks below you. This is a
+    // render-only shift (the game camera and gameplay are untouched) and it is actually visible.
+    float worldScaleEyeOffsetM = 0.0f;
+    if (sFirstPerson && sWorldScale > 0.0f) {
+        const float baseEyeM = 1.1f; // ~life-size eye height in the render
+        worldScaleEyeOffsetM = baseEyeM * (1.0f - 1.0f / sWorldScale);
+        if (eye == 0) { static int sWsDbg = 0; if ((sWsDbg++ % 90) == 0) printf("[WSCALE] worldScale=%.2f eyeOffset=%.2fm\n", sWorldScale, worldScaleEyeOffsetM); }
+    }
     A[0][0] = invS; A[1][1] = invS; A[2][2] = invS; A[3][3] = 1.0f;
     A[3][0] = sAnticlipOffsetM[0];
-    A[3][1] = sDioramaHeight + sAnticlipOffsetM[1];
+    A[3][1] = sDioramaHeight + sAnticlipOffsetM[1] + worldScaleEyeOffsetM;
     A[3][2] = -effDist + sAnticlipOffsetM[2];
 
     // Cyclopean eye position in game-camera space (the space A consumes), computed against the BASE
@@ -480,8 +498,8 @@ bool vr_headset_present(void) {
 // Full OpenXR boot. Runs lazily on the first vr_begin_frame() so the WGL context
 // is guaranteed current. Any failure leaves VR inactive (game keeps rendering flat).
 static void vr_boot(void) {
-    printf("[VR] booting OpenXR...\n");
-    vr_settings_load(); // restore the VR menu settings saved last session, before anything renders
+    if (!sBootRetrying) { printf("[VR] booting OpenXR...\n"); }
+    if (!sSettingsLoaded) { sSettingsLoaded = true; vr_settings_load(); } // only the FIRST attempt loads the file; a retry must not clobber live menu edits
 
     // Opt into the cylinder layer (surround sky) if the runtime offers it.
     sHasCylinder = false;
@@ -516,14 +534,37 @@ static void vr_boot(void) {
     if (!xrok(xrCreateInstance(&ici, &sInstance), "xrCreateInstance")) { vr_shutdown(); return; }
 
     XrInstanceProperties props = { XR_TYPE_INSTANCE_PROPERTIES };
-    if (XR_SUCCEEDED(xrGetInstanceProperties(sInstance, &props)))
+    if (XR_SUCCEEDED(xrGetInstanceProperties(sInstance, &props)) && !sBootRetrying)
         printf("[VR] runtime: %s\n", props.runtimeName);
-    printf("[VR] surround sky (cylinder layer): %s\n", sHasCylinder ? "yes" : "no - flat quad fallback");
-    printf("[VR] full-sphere sky (equirect2 layer): %s\n", sHasEquirect2 ? "yes - no black poles" : "no - cylinder fallback");
+    if (!sBootRetrying) {
+        printf("[VR] surround sky (cylinder layer): %s\n", sHasCylinder ? "yes" : "no - flat quad fallback");
+        printf("[VR] full-sphere sky (equirect2 layer): %s\n", sHasEquirect2 ? "yes - no black poles" : "no - cylinder fallback");
+    }
 
     XrSystemGetInfo sgi = { XR_TYPE_SYSTEM_GET_INFO };
     sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
-    if (!xrok(xrGetSystem(sInstance, &sgi, &sSystemId), "xrGetSystem")) { vr_shutdown(); return; }
+    {
+        XrResult r = xrGetSystem(sInstance, &sgi, &sSystemId);
+        if (XR_FAILED(r)) {
+            vr_shutdown();
+            if (r == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
+                // The runtime is installed but the headset isn't ready yet (e.g. Virtual Desktop still
+                // connecting, headset asleep). The spec marks this transient: keep retrying quietly in the
+                // background and VR comes up the moment the headset does. The game stays flat meanwhile.
+                if (!sBootRetrying) {
+                    printf("[VR] headset not connected yet - retrying in the background. The game runs flat\n");
+                    printf("[VR] until the headset is ready (connect Virtual Desktop / wake the headset).\n");
+                }
+                sBootRetrying = true;
+                sBootTried = false;     // allow another attempt
+                sBootRetryIn = 180;     // ~2-6 s of frames between attempts (cheap: instance create + probe)
+            } else {
+                xrok(r, "xrGetSystem"); // hard failure: print it and stay flat for this session
+            }
+            return;
+        }
+    }
+    if (sBootRetrying) { printf("[VR] headset connected - booting OpenXR now.\n"); sBootRetrying = false; }
 
     if (!xrok(xrGetInstanceProcAddr(sInstance, "xrGetOpenGLGraphicsRequirementsKHR",
             (PFN_xrVoidFunction *)&pfnGetGLReq), "get xrGetOpenGLGraphicsRequirementsKHR")) { vr_shutdown(); return; }
@@ -648,6 +689,7 @@ static void vr_boot(void) {
     }
 
     printf("[VR] OpenXR ready; waiting for session to start.\n");
+    printf("[VRBUILD] v0.4: per-preset-memory + diorama-1376 + paginated-vr-menu + theater-hidden (if you don't see this line, you are running an OLD exe)\n");
 }
 
 static void vr_poll_events(void) {
@@ -699,29 +741,53 @@ static void vr_write_tune_file(void) {
 
 // --- VR presets (selectable looks) -------------------------------------------
 // First-person is now a preset: it enables coopdx's first-person camera (camera at Mario's head)
-// and renders life-size at 1:1 instead of the shrunk diorama. F10 cycles Diorama / Close-up / First-person.
+// and renders life-size at 1:1 instead of the shrunk diorama. F10 / d-pad up cycles
+// Diorama / Third-person / First-person / Theater.
 typedef struct { const char *name; float scale, dist, height, stereo, pitch; bool firstPerson; } VrPreset;
 static const VrPreset sPresets[] = {
-    // Tabletop: small (scale 3000 ~= 2.7m world), low + close, strong stereo for miniature parallax. The
+    // Diorama: small (scale 1376 ~= 5.8m world), low + close, strong stereo for miniature parallax. The
     // nose-down tilt is kept small (~4.5 deg): it's applied in eye space, so a larger tilt leaks into a
     // roll when you tilt your head (the "lopsided" look). The low + close framing carries the look-down.
-    { "Diorama",      3000.0f,  0.25f, -0.35f, 0.45f, 0.08f, false },
-    { "Close-up",     1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false },
+    { "Diorama",      1376.0f,  0.25f, -0.35f, 0.45f, 0.08f, false },
+    { "Third-person",     1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false },
     { "First-person",  100.0f,  0.00f,  0.00f, 0.50f, 0.00f, true  }, // life-size, eye at Mario's head, full 6DoF
+    { "Theater",       1200.0f, -0.17f,  0.00f, 0.21f, 0.00f, false }, // flat game on a big world-locked screen (panel path)
 };
 #define VR_NUM_PRESETS ((int)(sizeof(sPresets) / sizeof(sPresets[0])))
-static int sCurrentPreset = 1; // launch default = Close-up
+static int sCurrentPreset = 1; // launch default = Third-person
+
+// Per-preset user tunables: slider tweaks made while a preset is active are remembered FOR THAT PRESET
+// (switching Diorama -> First-person -> Diorama brings your Diorama tweaks back), and every preset's set
+// is saved to vr_settings.txt so it survives a relaunch. Seeded from the stock table; the menu setters
+// write the live value back into the active preset's slot.
+typedef struct { float scale, dist, height, stereo, head; } VrPresetTunables;
+static VrPresetTunables sPresetUser[VR_NUM_PRESETS];
+static bool sPresetUserSeeded = false;
+static void vr_preset_user_seed(void) {
+    if (sPresetUserSeeded) { return; }
+    sPresetUserSeeded = true;
+    for (int i = 0; i < VR_NUM_PRESETS; i++) {
+        sPresetUser[i].scale  = sPresets[i].scale;
+        sPresetUser[i].dist   = sPresets[i].dist;
+        sPresetUser[i].height = sPresets[i].height;
+        sPresetUser[i].stereo = sPresets[i].stereo;
+        sPresetUser[i].head   = sPresets[i].firstPerson ? 1.0f : 0.4f; // life-size wants true 1:1 head motion; diorama wants damping
+    }
+}
 
 static void vr_apply_preset(int idx) {
     if (idx < 0 || idx >= VR_NUM_PRESETS) return;
+    vr_preset_user_seed();
     sCurrentPreset = idx;
-    sDioramaScale  = sPresets[idx].scale;
-    sDioramaDist   = sPresets[idx].dist;
-    sDioramaHeight = sPresets[idx].height;
-    sStereoScale   = sPresets[idx].stereo;
+    // Restore the tunables you last used in this preset (stock values until you've tweaked it). The
+    // setters write through to sPresetUser, so the preset you're leaving keeps what you dialed in.
+    sDioramaScale  = sPresetUser[idx].scale;
+    sDioramaDist   = sPresetUser[idx].dist;
+    sDioramaHeight = sPresetUser[idx].height;
+    sStereoScale   = sPresetUser[idx].stereo;
+    sHeadScale     = sPresetUser[idx].head;
     sDioramaPitchRad = sPresets[idx].pitch;
     sFirstPerson   = sPresets[idx].firstPerson;
-    sHeadScale     = sFirstPerson ? 1.0f : 0.4f; // life-size wants true 1:1 head motion; diorama wants damping
     sHeadRestSet   = false; sHeadWarmup = 0;
     printf("[VR] preset %d/%d: %s (scale=%.0f dist=%.2f height=%.2f stereo=%.2f fp=%d)\n",
         idx + 1, VR_NUM_PRESETS, sPresets[idx].name,
@@ -732,30 +798,45 @@ static void vr_apply_preset(int idx) {
 
 // --- In-game VR menu accessors (used by djui_panel_vr.c) ---------------------
 int   vr_get_preset_index(void)      { return sCurrentPreset; }
-void  vr_set_preset_index(int idx)   { vr_apply_preset(idx); } // 0=Tabletop, 1=Close-up, 2=First-person
-void  vr_cycle_preset(void)          { vr_apply_preset((sCurrentPreset + 1) % VR_NUM_PRESETS); } // F10 / d-pad up
+void  vr_set_preset_index(int idx)   { vr_apply_preset(idx); } // 0=Diorama, 1=Third-person, 2=First-person, 3=Theater
+void  vr_cycle_preset(void)          { // F10 / d-pad up: Diorama -> Third-person -> First-person (-> Theater when enabled)
+    int idx = (sCurrentPreset + 1) % VR_NUM_PRESETS;
+#if !VR_THEATER_ENABLED
+    if (idx == 3) { idx = (idx + 1) % VR_NUM_PRESETS; } // Theater is hidden until it's finished
+#endif
+    vr_apply_preset(idx);
+}
 int   vr_get_preset_count(void)      { return VR_NUM_PRESETS; }
 const char* vr_get_preset_name(int i){ return (i >= 0 && i < VR_NUM_PRESETS) ? sPresets[i].name : ""; }
 float vr_get_menu_dist(void)         { return sMenuDist; }
 void  vr_set_menu_dist(float v)      { sMenuDist = v; vr_settings_mark_dirty(); }
 float vr_get_menu_size(void)         { return sMenuSize; }
 void  vr_set_menu_size(float v)      { sMenuSize = v; vr_settings_mark_dirty(); }
+float vr_get_theater_dist(void)      { return sTheaterDist; }
+void  vr_set_theater_dist(float v)   { sTheaterDist = (v < 1.0f) ? 1.0f : (v > 10.0f ? 10.0f : v); vr_settings_mark_dirty(); }
+float vr_get_theater_size(void)      { return sTheaterSize; }
+void  vr_set_theater_size(float v)   { sTheaterSize = (v < 3.0f) ? 3.0f : (v > 20.0f ? 20.0f : v); vr_settings_mark_dirty(); }
+int   vr_get_theater_bg(void)        { return sTheaterBg; }
+void  vr_set_theater_bg(int mode)    { sTheaterBg = (mode < 0 || mode > 1) ? 0 : mode; sBgLoadTried = false; vr_settings_mark_dirty(); } // 3D Model (2) is hidden until implemented -> Black
+// The five preset-shaped tunables write through to the active preset's slot, so each view mode keeps
+// what you dialed in across mode switches AND relaunches (every slot is saved to vr_settings.txt).
 float vr_get_diorama_dist(void)      { return sDioramaDist; }
-void  vr_set_diorama_dist(float v)   { sDioramaDist = v; vr_settings_mark_dirty(); }
+void  vr_set_diorama_dist(float v)   { sDioramaDist = v; vr_preset_user_seed(); sPresetUser[sCurrentPreset].dist = sDioramaDist; vr_settings_mark_dirty(); }
 float vr_get_diorama_scale(void)     { return sDioramaScale; }
-void  vr_set_diorama_scale(float v)  { sDioramaScale = (v < 30.0f) ? 30.0f : v; vr_settings_mark_dirty(); }
+void  vr_set_diorama_scale(float v)  { sDioramaScale = (v < 30.0f) ? 30.0f : v; vr_preset_user_seed(); sPresetUser[sCurrentPreset].scale = sDioramaScale; vr_settings_mark_dirty(); }
 float vr_get_stereo(void)            { return sStereoScale; }
-void  vr_set_stereo(float v)         { sStereoScale = (v < 0.0f) ? 0.0f : v; vr_settings_mark_dirty(); }
+void  vr_set_stereo(float v)         { sStereoScale = (v < 0.0f) ? 0.0f : v; vr_preset_user_seed(); sPresetUser[sCurrentPreset].stereo = sStereoScale; vr_settings_mark_dirty(); }
 float vr_get_diorama_height(void)    { return sDioramaHeight; }
-void  vr_set_diorama_height(float v) { sDioramaHeight = v; vr_settings_mark_dirty(); }
+void  vr_set_diorama_height(float v) { sDioramaHeight = v; vr_preset_user_seed(); sPresetUser[sCurrentPreset].height = sDioramaHeight; vr_settings_mark_dirty(); }
 float vr_get_head_scale(void)        { return sHeadScale; }
-void  vr_set_head_scale(float v)     { sHeadScale = (v < 0.0f) ? 0.0f : (v > 1.5f ? 1.5f : v); vr_settings_mark_dirty(); }
+void  vr_set_head_scale(float v)     { sHeadScale = (v < 0.0f) ? 0.0f : (v > 1.5f ? 1.5f : v); vr_preset_user_seed(); sPresetUser[sCurrentPreset].head = sHeadScale; vr_settings_mark_dirty(); }
 float vr_get_hud_size(void)          { return sHudSize; }
 void  vr_set_hud_size(float v)       { sHudSize = (v < 0.5f) ? 0.5f : v; vr_settings_mark_dirty(); } // VR HUD panel width (m)
 float vr_get_world_scale(void)       { return sWorldScale; }
 void  vr_set_world_scale(float v)    { sWorldScale = (v < 0.25f) ? 0.25f : (v > 4.0f ? 4.0f : v); vr_settings_mark_dirty(); } // first-person world scale
 // Tabletop is preset 0 - the model-on-a-table view that uses the free orbit camera (see camera.c).
 bool  vr_is_tabletop_mode(void)      { return sRunning && sCurrentPreset == 0; }
+bool  vr_is_theater_mode(void)       { return sRunning && sCurrentPreset == 3; } // flat game on a big screen (panel path)
 
 // The headset's real refresh rate in Hz, taken from the runtime's predicted display period (filled by
 // xrWaitFrame each frame). pc_main uses this to run the interpolation loop at the headset's cadence
@@ -771,14 +852,26 @@ int vr_get_refresh_rate(void) {
 }
 
 void  vr_set_first_person(bool on) {
-    if (on) { vr_apply_preset(VR_NUM_PRESETS - 1); }   // the First-person preset
-    else if (sFirstPerson) { vr_apply_preset(1); }      // back to Close-up
+    if (on) {
+        // Apply the First-person preset by its flag, NOT VR_NUM_PRESETS-1: adding the Theater preset made
+        // the last index Theater (the flat screen), so the old code dropped you onto the screen instead.
+        for (int i = 0; i < VR_NUM_PRESETS; i++) {
+            if (sPresets[i].firstPerson) { vr_apply_preset(i); break; }
+        }
+    } else if (sFirstPerson) {
+        vr_apply_preset(1); // back to Third-person
+    }
 }
-// Reset every VR tunable to its launch default (Close-up preset + default panel placement).
+// Reset every VR tunable to its launch default (Third-person preset + default panel placement).
 void vr_reset_defaults(void) {
-    vr_apply_preset(1);     // Close-up: resets scale/dist/height/stereo/first-person/head-damping
+    sPresetUserSeeded = false;  // forget every preset's remembered tweaks -> back to the stock table
+    vr_apply_preset(1);     // Third-person: resets scale/dist/height/stereo/first-person/head-damping
     sMenuDist = 3.0f;
     sMenuSize = 4.8f;
+    sHudSize  = 2.4f;
+    sTheaterDist = 4.0f;
+    sTheaterSize = 9.0f;
+    sTheaterBg = 0;
     sMenuVOffset = 0.0f;
     sPanelAnchorValid = false;
     sPanelEyeYValid = false;  // re-lock the menu eye height
@@ -796,15 +889,23 @@ void vr_settings_mark_dirty(void) { sSettingsDirty = true; sSettingsFlushIn = 45
 
 // Write the current VR menu state to vr_settings.txt next to the exe (simple key=value lines).
 static void vr_settings_save(void) {
+    vr_preset_user_seed();
     FILE *f = fopen("vr_settings.txt", "w");
     if (!f) { return; }
     fprintf(f,
         "preset=%d\nscale=%.3f\ndist=%.4f\nheight=%.4f\nstereo=%.4f\nhead=%.4f\n"
-        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nworldscale=%.3f\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\nheadmove=%d\n",
+        "menudist=%.3f\nmenusize=%.3f\nhudsize=%.3f\nworldscale=%.3f\ntheaterdist=%.3f\ntheatersize=%.3f\ntheaterbg=%d\nanticlip=%d\nflipcam=%d\ninteractcam=%d\nhidehud=%d\nheadmove=%d\n",
         sCurrentPreset, sDioramaScale, sDioramaDist, sDioramaHeight, sStereoScale, sHeadScale,
-        sMenuDist, sMenuSize, sHudSize, sWorldScale, sAnticlipEnabled ? 1 : 0,
+        sMenuDist, sMenuSize, sHudSize, sWorldScale, sTheaterDist, sTheaterSize, sTheaterBg, sAnticlipEnabled ? 1 : 0,
         first_person_get_flip_cam() ? 1 : 0, first_person_get_interact_cam() ? 1 : 0,
         gMenuHideHud ? 1 : 0, sHeadMoveEnabled ? 1 : 0);
+    // Per-preset tunables, one set per view mode, so every mode's tweaks survive a relaunch. The legacy
+    // single-set keys above mirror the CURRENT preset so an older build reading this file still works.
+    for (int i = 0; i < VR_NUM_PRESETS; i++) {
+        fprintf(f, "p%d_scale=%.3f\np%d_dist=%.4f\np%d_height=%.4f\np%d_stereo=%.4f\np%d_head=%.4f\n",
+            i, sPresetUser[i].scale, i, sPresetUser[i].dist, i, sPresetUser[i].height,
+            i, sPresetUser[i].stereo, i, sPresetUser[i].head);
+    }
     fclose(f);
 }
 
@@ -812,6 +913,7 @@ static void vr_settings_save(void) {
 // applied directly (not via vr_apply_preset) so the saved slider tweaks aren't overwritten by the preset's
 // stock values - only the preset-derived first-person flag and view tilt are taken from the table.
 static void vr_settings_load(void) {
+    vr_preset_user_seed();
     FILE *f = fopen("vr_settings.txt", "r");
     if (!f) { return; }
     int preset   = sCurrentPreset;
@@ -820,33 +922,68 @@ static void vr_settings_load(void) {
     int interact = first_person_get_interact_cam() ? 1 : 0;
     int hud      = gMenuHideHud ? 1 : 0;
     int headmove = sHeadMoveEnabled ? 1 : 0;
+    int theaterbg = sTheaterBg;
+    bool sawPerPreset = false; // file carries p<N>_* keys (new format: one tunable set per view mode)
+    bool sawLegacy    = false; // file carries the old single-set keys (pre-per-preset format)
     char line[128], key[64];
     double val;
     while (fgets(line, sizeof(line), f)) {
         if (sscanf(line, "%63[^=]=%lf", key, &val) != 2) { continue; }
+        // Per-preset tunables: p<index>_<field>.
+        int pi = -1; char sub[32] = { 0 };
+        if (sscanf(key, "p%d_%31s", &pi, sub) == 2 && pi >= 0 && pi < VR_NUM_PRESETS) {
+            sawPerPreset = true;
+            if      (!strcmp(sub, "scale"))  { sPresetUser[pi].scale  = (float)val; }
+            else if (!strcmp(sub, "dist"))   { sPresetUser[pi].dist   = (float)val; }
+            else if (!strcmp(sub, "height")) { sPresetUser[pi].height = (float)val; }
+            else if (!strcmp(sub, "stereo")) { sPresetUser[pi].stereo = (float)val; }
+            else if (!strcmp(sub, "head"))   { sPresetUser[pi].head   = (float)val; }
+            continue;
+        }
         if      (!strcmp(key, "preset"))      { preset         = (int)val; }
-        else if (!strcmp(key, "scale"))       { sDioramaScale  = (float)val; }
-        else if (!strcmp(key, "dist"))        { sDioramaDist   = (float)val; }
-        else if (!strcmp(key, "height"))      { sDioramaHeight = (float)val; }
-        else if (!strcmp(key, "stereo"))      { sStereoScale   = (float)val; }
-        else if (!strcmp(key, "head"))        { sHeadScale     = (float)val; }
+        else if (!strcmp(key, "scale"))       { sDioramaScale  = (float)val; sawLegacy = true; }
+        else if (!strcmp(key, "dist"))        { sDioramaDist   = (float)val; sawLegacy = true; }
+        else if (!strcmp(key, "height"))      { sDioramaHeight = (float)val; sawLegacy = true; }
+        else if (!strcmp(key, "stereo"))      { sStereoScale   = (float)val; sawLegacy = true; }
+        else if (!strcmp(key, "head"))        { sHeadScale     = (float)val; sawLegacy = true; }
         else if (!strcmp(key, "menudist"))    { sMenuDist      = (float)val; }
         else if (!strcmp(key, "menusize"))    { sMenuSize      = (float)val; }
         else if (!strcmp(key, "hudsize"))     { sHudSize       = (float)val; }
         else if (!strcmp(key, "worldscale"))  { sWorldScale    = (float)val; }
+        else if (!strcmp(key, "theaterdist")) { sTheaterDist   = (float)val; }
+        else if (!strcmp(key, "theatersize")) { sTheaterSize   = (float)val; }
         else if (!strcmp(key, "anticlip"))    { anticlip       = (int)val; }
         else if (!strcmp(key, "flipcam"))     { flip           = (int)val; }
         else if (!strcmp(key, "interactcam")) { interact       = (int)val; }
         else if (!strcmp(key, "hidehud"))     { hud            = (int)val; }
         else if (!strcmp(key, "headmove"))    { headmove       = (int)val; }
+        else if (!strcmp(key, "theaterbg"))   { theaterbg      = (int)val; }
     }
     fclose(f);
     if (preset < 0 || preset >= VR_NUM_PRESETS) { preset = 1; }
+#if !VR_THEATER_ENABLED
+    if (preset == 3) { preset = 1; } // Theater is hidden until it's finished; land in Third-person
+#endif
+    if (theaterbg < 0 || theaterbg > 1) { theaterbg = 0; } // 3D Model (2) is hidden until implemented -> Black
+    // Old single-set file: fold its one tunable set into the saved preset's slot so it sticks.
+    if (sawLegacy && !sawPerPreset) {
+        sPresetUser[preset].scale  = sDioramaScale;
+        sPresetUser[preset].dist   = sDioramaDist;
+        sPresetUser[preset].height = sDioramaHeight;
+        sPresetUser[preset].stereo = sStereoScale;
+        sPresetUser[preset].head   = sHeadScale;
+    }
     sCurrentPreset   = preset;
+    sDioramaScale    = sPresetUser[preset].scale;
+    sDioramaDist     = sPresetUser[preset].dist;
+    sDioramaHeight   = sPresetUser[preset].height;
+    sStereoScale     = sPresetUser[preset].stereo;
+    sHeadScale       = sPresetUser[preset].head;
     sFirstPerson     = sPresets[preset].firstPerson;
     sDioramaPitchRad = sPresets[preset].pitch;
     sAnticlipEnabled = (anticlip != 0);
     sHeadMoveEnabled = (headmove != 0);
+    sTheaterBg       = theaterbg; // already clamped above (0=Black, 1=Panoramic)
     first_person_set_flip_cam(flip != 0);
     first_person_set_interact_cam(interact != 0);
     gMenuHideHud = (unsigned char)(hud ? 1 : 0);
@@ -860,7 +997,21 @@ void  vr_anticlip_set_enabled(bool e){ sAnticlipEnabled = e; if (!e) { sAnticlip
 
 // --- Head-direction movement (VR first-person, opt-in): walk/turn toward where the head looks ---------
 // Head yaw offset from the rest gaze, as an SM64 s16 angle. mario.c adds this to the move reference yaw.
-int   vr_get_look_yaw(void)          { float r = vr_head_yaw_rad() - sHeadRestYawRad; return (short)(r * (32768.0f / 3.14159265358979f)); }
+int   vr_get_look_yaw(void)          {
+    // Head-look steering, balanced + responsive. Called once per frame from the movement code. Raw HMD yaw is
+    // noisy frame-to-frame and a head whip would jerk Mario, so low-pass it; a small deadzone keeps tiny
+    // glances from nudging your heading, and subtracting the deadzone past the edge keeps it continuous (no
+    // jump). Full magnitude past that, so "move where you look" still points you where you actually look.
+    float raw = vr_head_yaw_rad() - sHeadRestYawRad;
+    static float sLookSmooth = 0.0f;
+    sLookSmooth += (raw - sLookSmooth) * 0.15f;
+    float v = sLookSmooth;
+    const float deadzone = 0.0524f; // ~3 degrees
+    if      (v >  deadzone) { v -= deadzone; }
+    else if (v < -deadzone) { v += deadzone; }
+    else                    { v  = 0.0f; }
+    return (short)(v * (32768.0f / 3.14159265358979f));
+}
 bool  vr_get_head_move(void)         { return sHeadMoveEnabled; }
 void  vr_set_head_move(bool e)       { sHeadMoveEnabled = e; vr_settings_mark_dirty(); }
 // Cyclopean eye position in game-camera space (game units). Returns false when there's nothing to
@@ -868,7 +1019,7 @@ void  vr_set_head_move(bool e)       { sHeadMoveEnabled = e; vr_settings_mark_di
 // let the applied offset ease back to zero.
 bool  vr_anticlip_get_head_campos(float out[3]) {
     // Tabletop (preset 0) handles wall collision with its own smooth camera-distance clamp (bettercamera);
-    // running this world-nudge there too just makes the two fight, so skip it. Close-up still uses it.
+    // running this world-nudge there too just makes the two fight, so skip it. Third-person still uses it.
     if (!sAnticlipEnabled || !sHeadCamPosValid || !sViewsValid || sCurrentPreset == 0) { return false; }
     out[0] = sHeadCamPos[0]; out[1] = sHeadCamPos[1]; out[2] = sHeadCamPos[2];
     return true;
@@ -890,7 +1041,7 @@ void  vr_set_flip_roll(float radians) {
 // Pick the flip axis: true = side flip (roll about the forward axis), false = forward/back flip (pitch).
 void  vr_set_flip_side(bool side) { sFlipIsSide = side; }
 
-// The only VR hotkey: F10 cycles the view presets (Diorama / Close-up / First-person). Everything else
+// The only VR hotkey: F10 cycles the view presets (Diorama / Third-person / First-person). Everything else
 // is tuned from the in-game Options -> VR menu.
 static void vr_poll_tuning_keys(void) {
     const Uint8 *ks = SDL_GetKeyboardState(NULL);
@@ -908,7 +1059,10 @@ void vr_begin_frame(void) {
     if (!sRequested) return;
     // Debounced write of changed VR settings: flush once the slider/toggle activity settles.
     if (sSettingsDirty && --sSettingsFlushIn <= 0) { vr_settings_save(); sSettingsDirty = false; }
-    if (!sBootTried) { sBootTried = true; vr_boot(); }
+    if (!sBootTried) {
+        if (sBootRetryIn > 0) { sBootRetryIn--; }      // headset wasn't ready: wait out the retry delay
+        else { sBootTried = true; vr_boot(); }         // first attempt, or the next retry
+    }
     if (sSession == XR_NULL_HANDLE) return;
 
     vr_poll_events();
@@ -1051,6 +1205,67 @@ void vr_end_panel(void) {
     vr_end_overlay(false); // releases sHud, sets sHudReady = true
 }
 
+// Theater Panoramic backdrop: load a theater_bg image into a GL texture once. ANY image works - png,
+// jpg/jpeg, bmp or tga, any size, any aspect (a 2:1 equirectangular panorama covers the most view; a
+// plain photo or wallpaper shows at its own shape). The game folder (next to the exe, same place as
+// vr_settings.txt) is tried FIRST so an image can ship with the game; the per-user write folder still
+// works as a fallback. stb_image is already compiled into gfx_pc.c, so we just declare the symbols.
+static bool vr_backdrop_load_image(void) {
+    if (sBgLoadTried) { return sBgTex != 0; }
+    sBgLoadTried = true;
+    extern unsigned char *stbi_load(const char *filename, int *x, int *y, int *comp, int req_comp);
+    extern void stbi_image_free(void *retval_from_stbi_load);
+    extern const char *fs_get_write_path(const char *suffix);
+    static const char *kBgNames[] = { "theater_bg.png", "theater_bg.jpg", "theater_bg.jpeg", "theater_bg.bmp", "theater_bg.tga" };
+    const int kBgNameCount = (int)(sizeof(kBgNames) / sizeof(kBgNames[0]));
+    int w = 0, h = 0, c = 0;
+    const char *path = NULL;
+    unsigned char *px = NULL;
+    for (int i = 0; i < kBgNameCount && !px; i++) {           // game folder (next to the exe) - the shipped image
+        path = kBgNames[i];
+        px = stbi_load(path, &w, &h, &c, 4);
+    }
+    for (int i = 0; i < kBgNameCount && !px; i++) {           // fallback: per-user write folder
+        path = fs_get_write_path(kBgNames[i]);
+        px = stbi_load(path, &w, &h, &c, 4);
+    }
+    if (!px) { printf("[VR] Theater backdrop: no theater_bg image (.png/.jpg/.jpeg/.bmp/.tga) next to the exe or in the user folder\n"); return false; }
+    if (sBgTex == 0) { glGenTextures(1, &sBgTex); }
+    glBindTexture(GL_TEXTURE_2D, sBgTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);        // wrap horizontally (360)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    stbi_image_free(px);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    sBgW = w; sBgH = h;
+    printf("[VR] Theater backdrop: loaded %s (%dx%d)\n", path, w, h);
+    return true;
+}
+
+// Blit the loaded panorama into the world-locked overlay swapchain so vr_submit can present it as a
+// cylinder/equirect/quad backdrop layer. Called from pc_main in the Theater panel path when mode == Panoramic.
+bool vr_render_backdrop_pano(void) {
+    sBackdropReady = false;
+    if (!vr_backdrop_load_image()) { return false; }
+    bool beganOverlay = vr_begin_overlay(true);       // acquires sOverlay + binds sOverlayFbo + viewport
+    { static int d = 0; if ((d++ % 30) == 0) printf("[BGDIAG] begin=%d handle=%p w=%d h=%d fbo=%u tex=%u\n",
+        (int) beganOverlay, (void *) sOverlay.handle, (int) sOverlay.w, (int) sOverlay.h, (unsigned) sOverlayFbo, (unsigned) sBgTex); }
+    if (!beganOverlay) { return false; }
+    static GLuint sBgReadFbo = 0;
+    if (sBgReadFbo == 0) { glGenFramebuffers(1, &sBgReadFbo); }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sBgReadFbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sBgTex, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sOverlayFbo);
+    glBlitFramebuffer(0, 0, sBgW, sBgH, 0, 0, (GLint)sOverlay.w, (GLint)sOverlay.h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    vr_end_overlay(true);                              // releases sOverlay + sets sOverlayReady
+    sBackdropReady = true;                             // sOverlay was genuinely acquired+blitted this frame
+    return true;
+}
+
 void vr_submit(void) {
     if (!sRunning || !sFrameBegun) return;
     sFrameBegun = false;
@@ -1060,6 +1275,11 @@ void vr_submit(void) {
 
     XrCompositionLayerProjection   proj    = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     XrCompositionLayerQuad         hudQuad = { XR_TYPE_COMPOSITION_LAYER_QUAD };
+    // FUNCTION scope, not block scope: layers[] holds POINTERS that xrEndFrame reads at the bottom of this
+    // function. A block-scoped layer struct dies at its closing brace, the compiler reuses the stack slot,
+    // and the runtime reads garbage - which is exactly an XR_ERROR_HANDLE_INVALID that looks like a bad
+    // swapchain. (This is what broke every Theater backdrop layer type: cylinder AND quad.)
+    XrCompositionLayerQuad         bgQuad  = { XR_TYPE_COMPOSITION_LAYER_QUAD };
     // Game outputs STRAIGHT (non-premultiplied) alpha; the head-locked HUD quad must be UNPREMULTIPLIED.
     const XrCompositionLayerFlags kBlend = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT
                                          | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
@@ -1067,6 +1287,34 @@ void vr_submit(void) {
     uint32_t layerCount = 0;
 
     if (sPanelMode) {
+        // Theater Panoramic backdrop: a user image, world-locked behind the cinema screen, emitted FIRST
+        // (layers[0]) so the opaque panel quad composites on top. The 360 cylinder/equirect2 layers return
+        // XR_ERROR_HANDLE_INVALID on this runtime (VirtualDesktopXR rejects them despite advertising support),
+        // which broke the whole frame submission - so use a large flat QUAD backdrop, the same proven layer
+        // type as the panel. It fills the forward view (black at the far edges) instead of a true 360 wrap.
+        if (sTheaterBg == VR_BG_PANORAMIC && sBackdropReady && sOverlay.handle != XR_NULL_HANDLE
+            && sLocalSpace != XR_NULL_HANDLE && sViewsValid) {
+            float hx = 0.5f * (sViews[0].pose.position.x + sViews[1].pose.position.x);
+            float hy = 0.5f * (sViews[0].pose.position.y + sViews[1].pose.position.y);
+            float hz = 0.5f * (sViews[0].pose.position.z + sViews[1].pose.position.z);
+            bgQuad.layerFlags = 0;
+            bgQuad.space = sLocalSpace;
+            bgQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            bgQuad.subImage.swapchain = sOverlay.handle;
+            bgQuad.subImage.imageRect.extent.width  = (int32_t) sOverlay.w;
+            bgQuad.subImage.imageRect.extent.height = (int32_t) sOverlay.h;
+            bgQuad.pose.orientation.w = 1.0f;            // faces the user (same convention as the panel quad)
+            bgQuad.pose.position.x = hx;
+            bgQuad.pose.position.y = hy;
+            bgQuad.pose.position.z = hz - 12.0f;         // behind the screen, forward (-Z)
+            // Size the quad to the IMAGE's aspect: the blit stretched the picture to fill the 16:9
+            // swapchain, and the quad shape un-stretches it, so any image shows at its natural
+            // proportions - a 2:1 panorama covers the most view, a portrait shot just stands taller.
+            bgQuad.size.width  = 50.0f;                  // large: fills the forward view
+            bgQuad.size.height = (sBgW > 0 && sBgH > 0) ? 50.0f * (float) sBgH / (float) sBgW
+                                                        : 50.0f * (float) sOverlay.h / (float) sOverlay.w;
+            layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&bgQuad;
+        }
         // FLATSCREEN-ON-A-PANEL: a non-gameplay screen was rendered flat into sHud. Present it as the
         // ONLY layer - one large OPAQUE quad. The flat frame is SM64 4:3 centered inside the 16:9
         // swapchain, so crop to the centered 4:3 region and size the quad 4:3 (no stretch, no bars).
@@ -1074,6 +1322,9 @@ void vr_submit(void) {
             hudQuad.layerFlags = 0;                                 // OPAQUE virtual screen
             hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             hudQuad.subImage.swapchain = sHud.handle;
+            // Theater mode plays the flat game on a big cinema screen; menus/transitions use the menu panel.
+            float panelSize = vr_is_theater_mode() ? sTheaterSize : sMenuSize;
+            float panelDist = vr_is_theater_mode() ? sTheaterDist : sMenuDist;
             if (sPanelFullFrame) {
                 // In-game menus: their lists run to the far left/right of the frame, so show the WHOLE
                 // 16:9 swapchain (no crop) on a 16:9 quad - nothing cut.
@@ -1081,8 +1332,8 @@ void vr_submit(void) {
                 hudQuad.subImage.imageRect.offset.y = 0;
                 hudQuad.subImage.imageRect.extent.width  = (int32_t)sHud.w;
                 hudQuad.subImage.imageRect.extent.height = (int32_t)sHud.h;
-                hudQuad.size.width  = sMenuSize;
-                hudQuad.size.height = sMenuSize * (float)sHud.h / (float)sHud.w; // 16:9
+                hudQuad.size.width  = panelSize;
+                hudQuad.size.height = panelSize * (float)sHud.h / (float)sHud.w; // 16:9
             } else {
                 // Title/main menu: content is centered in the 4:3 region. Crop to it and use a taller
                 // 4:3 quad so it fills your view with no empty void top/bottom (the original look).
@@ -1093,8 +1344,8 @@ void vr_submit(void) {
                 hudQuad.subImage.imageRect.offset.y = 0;
                 hudQuad.subImage.imageRect.extent.width  = cropW;
                 hudQuad.subImage.imageRect.extent.height = cropH;
-                hudQuad.size.width  = sMenuSize;
-                hudQuad.size.height = sMenuSize * 3.0f / 4.0f; // 4:3
+                hudQuad.size.width  = panelSize;
+                hudQuad.size.height = panelSize * 3.0f / 4.0f; // 4:3
             }
 
             if (sLocalSpace != XR_NULL_HANDLE) {
@@ -1136,9 +1387,9 @@ void vr_submit(void) {
                 hudQuad.pose.orientation.y = qy;
                 hudQuad.pose.orientation.z = 0.0f;
                 hudQuad.pose.orientation.w = qw;
-                hudQuad.pose.position.x = sPanelAnchorPos[0] + sMenuDist * fwdx;
+                hudQuad.pose.position.x = sPanelAnchorPos[0] + panelDist * fwdx;
                 hudQuad.pose.position.y = (sPanelEyeYValid ? sPanelEyeY : sPanelAnchorPos[1]) + sMenuVOffset;
-                hudQuad.pose.position.z = sPanelAnchorPos[2] + sMenuDist * fwdz;
+                hudQuad.pose.position.z = sPanelAnchorPos[2] + panelDist * fwdz;
                 layers[layerCount++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
             }
         }
@@ -1173,10 +1424,26 @@ void vr_submit(void) {
     fei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     fei.layerCount = layerCount;
     fei.layers = layerCount ? layers : NULL;
-    xrok(xrEndFrame(sSession, &fei), "xrEndFrame");
+    if (!xrok(xrEndFrame(sSession, &fei), "xrEndFrame")) {
+        // Self-recovery: never let a bad Theater backdrop layer brick VR. If submission keeps failing while a
+        // backdrop is active, drop back to Black so the panel keeps presenting.
+        if (sPanelMode && sTheaterBg != VR_BG_BLACK) {
+            static int sBgFails = 0;
+            if (++sBgFails >= 8) {
+                sTheaterBg = VR_BG_BLACK; sBgFails = 0;
+                printf("[VR] Theater backdrop kept failing submission - reverted to Black.\n");
+            }
+        }
+    }
+    sBackdropReady = false; // consume; next frame must re-prove the backdrop was acquired
 }
 
 void vr_shutdown(void) {
+    // Flush a VR menu change still waiting on the save debounce so quitting right after a tweak can't
+    // lose it. Gated on the settings file having been loaded this session, so a flatscreen session
+    // (which never loads it) can't overwrite the values saved by a previous VR session.
+    if (sSettingsDirty && sSettingsLoaded) { vr_settings_save(); sSettingsDirty = false; }
+    if (sBgTex)      { glDeleteTextures(1, &sBgTex); sBgTex = 0; }
     if (sEyeFbo)     { glDeleteFramebuffers(1, &sEyeFbo); sEyeFbo = 0; }
     if (sEyeDepthRB) { glDeleteRenderbuffers(1, &sEyeDepthRB); sEyeDepthRB = 0; }
     if (sOverlayFbo)     { glDeleteFramebuffers(1, &sOverlayFbo); sOverlayFbo = 0; }
@@ -1208,6 +1475,10 @@ bool  vr_first_person_active(void) { return false; }
 void  vr_set_first_person(bool on) { (void)on; }
 float vr_get_menu_dist(void)         { return 0.0f; } void vr_set_menu_dist(float v)     { (void)v; }
 float vr_get_menu_size(void)         { return 0.0f; } void vr_set_menu_size(float v)     { (void)v; }
+float vr_get_theater_dist(void)      { return 0.0f; } void vr_set_theater_dist(float v)  { (void)v; }
+float vr_get_theater_size(void)      { return 0.0f; } void vr_set_theater_size(float v)  { (void)v; }
+int   vr_get_theater_bg(void)        { return 0; } void vr_set_theater_bg(int mode) { (void)mode; }
+bool  vr_render_backdrop_pano(void)  { return false; }
 float vr_get_diorama_dist(void)      { return 0.0f; } void vr_set_diorama_dist(float v)  { (void)v; }
 float vr_get_diorama_scale(void)     { return 0.0f; } void vr_set_diorama_scale(float v) { (void)v; }
 float vr_get_stereo(void)            { return 0.0f; } void vr_set_stereo(float v)        { (void)v; }
@@ -1219,6 +1490,7 @@ float vr_get_world_scale(void)       { return 1.0f; } void vr_set_world_scale(fl
 int   vr_get_look_yaw(void)          { return 0; }
 bool  vr_get_head_move(void)         { return false; } void vr_set_head_move(bool e) { (void)e; }
 bool  vr_is_tabletop_mode(void)      { return false; }
+bool  vr_is_theater_mode(void)       { return false; }
 void  vr_reset_defaults(void) {}
 void  vr_settings_mark_dirty(void) {}
 bool  vr_anticlip_is_enabled(void)   { return false; } void vr_anticlip_set_enabled(bool e) { (void)e; }

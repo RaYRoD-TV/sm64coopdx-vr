@@ -68,7 +68,7 @@ echo Writing READ_ME_FIRST.txt ...
 >>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo VR settings are in-game: pause and open VR (right after Mod Menu). F10 cycles
->>"%DIST%\READ_ME_FIRST.txt" echo the view (diorama / close-up / first-person). See VR_README.md for the full guide.
+>>"%DIST%\READ_ME_FIRST.txt" echo the view (diorama / third-person / first-person). See VR_README.md for the full guide.
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo This download contains NO Nintendo files. coopdx reads Super Mario 64's
 >>"%DIST%\READ_ME_FIRST.txt" echo textures and audio from YOUR OWN ROM at runtime - you must own the game.

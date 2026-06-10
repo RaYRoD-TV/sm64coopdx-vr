@@ -1526,12 +1526,15 @@ void update_mario_joystick_inputs(struct MarioState *m) {
         if (gLakituState.mode != CAMERA_MODE_NEWCAM) {
             m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + m->area->camera->yaw;
         } else if (get_first_person_enabled()) {
-            // VR first-person "Move Where You Look" (opt-in): steer relative to where the head is looking by
-            // adding the head yaw offset to the camera yaw. Off / flatscreen: lookOff is 0 (unchanged).
-            s16 lookOff = (vr_is_active() && vr_get_head_move()) ? (s16)vr_get_look_yaw() : 0;
-            m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + gLakituState.yaw + lookOff;
+            m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + gLakituState.yaw;
         } else {
             m->intendedYaw = atan2s(-controller->stickY, controller->stickX) - gNewCamera.yaw + 0x4000;
+        }
+        // VR "Move Where You Look" (opt-in): add the head's yaw offset to whichever camera the move was made
+        // relative to, so you walk/turn toward where you're looking. Works in first AND third person; skipped
+        // in the diorama-orbit (Tabletop) and the flat Theater screen where head-aim wouldn't make sense.
+        if (vr_is_active() && vr_get_head_move() && !vr_is_tabletop_mode() && !vr_is_theater_mode()) {
+            m->intendedYaw += (s16) vr_get_look_yaw();
         }
         m->input |= INPUT_NONZERO_ANALOG;
     } else {

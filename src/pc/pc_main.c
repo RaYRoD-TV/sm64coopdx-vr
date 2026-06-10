@@ -282,6 +282,10 @@ static bool vr_frame_is_nongameplay(void) {
     extern bool gDjuiInMainMenu;        // pc/djui/djui.h
     extern bool djui_panel_is_active(void); // pc/djui/djui_panel.h - any DJUI panel open (player, dynos, pause, options)
     extern bool djui_panel_is_vr_panel(void);
+    extern bool vr_is_theater_mode(void);
+    // Theater mode plays the whole flat game (and its menus) on the big world-locked screen, so always use
+    // the panel path while it's active.
+    if (vr_is_theater_mode())              return true;
     // The VR settings menu stays in the stereo diorama (menu floats as a head-locked overlay) so you can see
     // diorama slider changes live - overrides the pause/panel checks below, which would force the flat panel.
     if (djui_panel_is_vr_panel())          return false;
@@ -504,7 +508,14 @@ void produce_interpolation_frames_and_delay(void) {
                     gfx_run_dl_vr_panel(vrDl, vr_overlay_width(), vr_overlay_height());
                     vr_end_panel();
                 }
-                vr_submit(); // panel-only layer
+                // Theater backdrop: mode 1 (Panoramic) renders the user panorama into the backdrop swapchain so
+                // vr_submit composites it behind the screen. Black (0) and Model (2) skip this -> plain black.
+                {
+                    extern bool vr_render_backdrop_pano(void);
+                    extern int  vr_get_theater_bg(void);
+                    if (vr_is_theater_mode() && vr_get_theater_bg() == 1) { vr_render_backdrop_pano(); }
+                }
+                vr_submit(); // panel (+ theater backdrop) layers
             } else {
                 // ACTIVE GAMEPLAY: existing stereo diorama + world-locked sky dome + head-locked
                 // HUD overlay (unchanged).

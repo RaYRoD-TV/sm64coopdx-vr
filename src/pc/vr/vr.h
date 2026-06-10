@@ -5,6 +5,11 @@
 
 #include <stdbool.h>
 
+// Theater mode (the flat game on a big world-locked screen) isn't finished, so its menu entry, sliders
+// and backdrop options are hidden for now. The implementation stays compiled and the settings keep
+// saving/loading; flip this to 1 to bring the UI back.
+#define VR_THEATER_ENABLED 0
+
 // Requested via the --vr CLI flag.
 void  vr_request_enable(void);
 bool  vr_is_requested(void);
@@ -27,11 +32,17 @@ bool  vr_first_person_active(void);
 
 // In-game VR options menu accessors (driven by the DJUI "VR" panel).
 void  vr_set_first_person(bool on);     // toggle the first-person preset (life-size, eye at Mario's head)
-int   vr_get_preset_index(void); void vr_set_preset_index(int idx); // VR mode: 0=Tabletop, 1=Close-up, 2=First-person
-void  vr_cycle_preset(void);     // cycle to the next VR mode (bound to F10 and d-pad up)
+int   vr_get_preset_index(void); void vr_set_preset_index(int idx); // VR mode: 0=Diorama, 1=Third-person, 2=First-person, 3=Theater (hidden)
+void  vr_cycle_preset(void);     // cycle to the next VR mode (bound to F10 and d-pad up); skips Theater while hidden
 int   vr_get_preset_count(void); const char* vr_get_preset_name(int i);
 float vr_get_menu_dist(void);    void vr_set_menu_dist(float v);    // flat menu panel distance (meters)
 float vr_get_menu_size(void);    void vr_set_menu_size(float v);    // flat menu panel width (meters)
+float vr_get_theater_dist(void); void vr_set_theater_dist(float v); // Theater screen distance (meters)
+float vr_get_theater_size(void); void vr_set_theater_size(float v); // Theater screen width (meters)
+// Theater backdrop: what fills the surround behind the cinema screen.
+enum VrTheaterBg { VR_BG_BLACK = 0, VR_BG_PANORAMIC = 1, VR_BG_MODEL = 2 };
+int   vr_get_theater_bg(void);   void vr_set_theater_bg(int mode);  // Theater backdrop selection
+bool  vr_render_backdrop_pano(void); // render the user panorama (theater_bg.png) into the backdrop swapchain
 float vr_get_diorama_dist(void); void vr_set_diorama_dist(float v); // diorama anchor distance (meters)
 float vr_get_diorama_scale(void);void vr_set_diorama_scale(float v);// diorama scale (game units per meter; bigger=smaller world)
 float vr_get_stereo(void);       void vr_set_stereo(float v);       // stereo separation strength
@@ -43,6 +54,7 @@ float vr_get_world_scale(void);  void vr_set_world_scale(float v);  // first-per
 int   vr_get_look_yaw(void);                                        // VR first-person head look yaw offset (SM64 s16 angle units)
 bool  vr_get_head_move(void);    void vr_set_head_move(bool e);     // opt-in: in VR first-person, move/turn toward where the head looks
 bool  vr_is_tabletop_mode(void);                                    // true in the Tabletop preset (free orbit camera)
+bool  vr_is_theater_mode(void);                                     // true in the Theater preset (flat game on a big screen)
 void  vr_reset_defaults(void);   // reset every VR tunable to launch defaults
 void  vr_settings_mark_dirty(void); // note a VR menu change so it gets saved to vr_settings.txt (debounced)
 

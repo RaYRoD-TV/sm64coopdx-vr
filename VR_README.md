@@ -30,8 +30,10 @@ buttons come from the controller or keyboard like the flat game.
 
 All tuning is in the in-game menu: pause and open VR (the button right after Mod Menu) to set the VR
 mode, view distance, size, height, stereo depth, head motion, and camera anti-clip, with a Reset to
-Default button. You can also cycle the VR mode (Diorama / Close-up / First-person) with d-pad up or
-the F10 key.
+Default button. The settings span three pages; flip them with the < > buttons or the L/R triggers.
+Each VR mode keeps its own values, so tweaks you make in Diorama come back when you return to it, and
+everything is saved between launches. You can also cycle the VR mode (Diorama / Third-person /
+First-person) with d-pad up or the F10 key.
 
 ## Building
 
@@ -73,4 +75,6 @@ The person you share with brings their own rom either way.
 
 It's beta. VR motion controllers aren't wired up yet, so you play with a normal gamepad or keyboard
 and head tracking handles the view. A few of the flat screens may want their panel distance nudged.
-Worth testing across different levels and runtimes.
+Worth testing across different levels and runtimes. A Theater mode (the flat game on a big
+world-locked screen, with an optional image backdrop) exists in the code but is hidden until it's
+finished - see VR_THEATER_ENABLED in src/pc/vr/vr.h.

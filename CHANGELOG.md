@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.4 - 2026-06-09
+
+VR
+- Each VR mode now keeps its own distance, size, height, stereo depth and head
+  motion values. Switching modes brings back what you set for that mode, and
+  every mode's values are saved between launches.
+- Settings changed right before quitting are no longer lost to the save delay.
+- The default Diorama size is now 1376.
+- The VR menu is paginated, so Reset to Default and Back are no longer cut off.
+  Flip pages with the < > buttons or the L/R triggers.
+- Reset to Default now also resets the HUD Size slider.
+- Added a World Scale slider for first person: it changes how big the world
+  feels on foot. Default is unchanged, and it only affects first person.
+- Door and level transitions (the fade and wipe) now fill the whole view
+  instead of showing in a small panel.
+- Talking to a character no longer zooms the view in too far. The diorama
+  framing holds while the text shows.
+- Third-person mode no longer dips the camera through the floor on quick
+  camera moves.
+
+First person
+- Optional Move Where You Look: Mario walks and turns toward where you are
+  looking. Off by default, with a toggle in the VR menu.
+- Sliding and diving no longer pull the camera back, so the ground does not
+  seem to slip out from under you mid-slide.
+- The view no longer gets stuck at a sign after reading it: the camera returns
+  faster once the dialog closes, snaps back as soon as you move, and a rare
+  sign-camera softlock now ends cleanly.
+
+Menus
+- The button press that opens a dialog no longer skips its first page.
+
 ## v0.3 - 2026-06-08
 
 VR
@@ -13,16 +45,8 @@ VR
 - VR settings are now remembered between launches: mode, distances, sizes,
   stereo depth, head motion, HUD size, anti-clip, and the first-person toggles.
 - Added a HUD Size slider to scale the in-headset HUD.
-- Added a World Scale slider for first person: it changes how big the world feels
-  on foot. Default is unchanged, and it only affects first person.
 - Frames are now paced by the headset itself instead of the desktop monitor's
   refresh, which helps smoothness when the two run at different rates.
-- Close-up mode no longer dips the camera through the floor on quick camera
-  moves.
-- Door and level transitions (the fade and wipe) now fill the whole view instead
-  of showing in a small panel.
-- Talking to a character in close-up no longer zooms the view in too far. The
-  diorama framing holds while the text shows.
 
 First person
 - The flip cam now rolls the side flip toward the side it actually flips, and
@@ -31,8 +55,6 @@ First person
   facing the wall.
 - In Diorama mode the C-up look-around no longer engages, so it cannot freeze
   your movement.
-- Optional Move Where You Look: Mario walks and turns toward where you are
-  looking. Off by default, with a toggle in the VR menu.
 
 Hide HUD
 - Hide HUD now hides the gameplay HUD, including mod-drawn HUDs, while leaving
@@ -45,12 +67,12 @@ Menus
 ## v0.2 - 2026-06-08
 
 VR
-- New VR Mode selector in the menu: Diorama, Close-up, First-person. You can
+- New VR Mode selector in the menu: Diorama, Third-person, First-person. You can
   also cycle the mode with d-pad up or the F10 key.
 - Diorama mode now reads like an actual model on a table: smaller world, sat
   lower and closer, with stronger stereo depth and a slight downward tilt so you
   look down at it.
-- Diorama and Close-up look controls now respond directly like first person
+- Diorama and Third-person look controls now respond directly like first person
   instead of the laggy accelerated camera.
 - The view recenters on whichever way you're facing when the game opens, so the
   world is in front of you no matter how you started.

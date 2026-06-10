@@ -3191,7 +3191,7 @@ void update_camera(struct Camera *c) {
     update_camera_hud_status(c);
 
     // VR Tabletop uses the free orbit camera (Puppycam) so you can look around the model from any angle.
-    // Force it on while in tabletop and restore the player's free-cam preference when leaving. Close-up,
+    // Force it on while in tabletop and restore the player's free-cam preference when leaving. Third-person,
     // first-person and flatscreen are untouched. newcam_toggle is a no-op when already in the target state.
     {
         static bool sVrForcedNewcam = false;
@@ -3224,11 +3224,11 @@ void update_camera(struct Camera *c) {
     if (c->cutscene == 0) {
         // Only process R_TRIG if 'fixed' is not selected in the menu
         if (cam_select_alt_mode(0) == CAM_SELECTION_MARIO && c->mode != CAMERA_MODE_NEWCAM) {
-            // A VR Close-up is a fixed vantage you look INTO; the rigid behind-Mario "Mario cam" spins the
-            // whole diorama as Mario turns and reads as the view breaking. Keep Close-up on the Lakitu orbit
+            // A VR Third-person is a fixed vantage you look INTO; the rigid behind-Mario "Mario cam" spins the
+            // whole diorama as Mario turns and reads as the view breaking. Keep Third-person on the Lakitu orbit
             // camera - ignore the R toggle and snap back to Lakitu if it was left on Mario cam. Tabletop is
             // excluded: it runs the free orbit camera (Puppycam) instead, handled above.
-            if (vr_is_active() && !vr_first_person_active() && !vr_is_tabletop_mode()) {
+            if (vr_is_active() && !vr_first_person_active() && !vr_is_tabletop_mode() && !vr_is_theater_mode()) {
                 set_cam_angle(CAM_ANGLE_LAKITU);
             } else if ((sCurrPlayMode != PLAY_MODE_PAUSED) && gPlayer1Controller->buttonPressed & R_TRIG) {
                 bool allowSetCamAngle = true;
@@ -3747,7 +3747,13 @@ void zoom_out_if_paused_and_outside(struct GraphNodeCamera *camera) {
         areaMaskIndex = 0;
         areaBit = 0;
     }
-    if (gCameraMovementFlags & CAM_MOVE_PAUSE_SCREEN && !gDjuiInPlayerMenu && !get_first_person_enabled()) {
+    // VR stereo views (Diorama / Third-person) keep the live world in view while paused - especially the VR
+    // settings panel, where you tune the diorama and need to see it at its in-game framing. The classic pause
+    // zoom-out yanks the camera 6000 units toward the area center, which reads as the whole diorama leaping
+    // far away the moment the menu opens. Theater shows the flat frame on a screen, so it keeps the classic look.
+    bool vrKeepsWorldFraming = vr_is_active() && !vr_is_theater_mode();
+    if (gCameraMovementFlags & CAM_MOVE_PAUSE_SCREEN && !gDjuiInPlayerMenu && !get_first_person_enabled()
+        && !vrKeepsWorldFraming) {
         if (sFramesPaused >= 2) {
             if (sZoomOutAreaMasks[areaMaskIndex] & areaBit) {
 
@@ -9588,6 +9594,7 @@ BAD_RETURN(s32) cutscene_read_message_start(struct Camera *c) {
     }
     sModeOffsetYaw = 0;
     sCutsceneVars[0].angle[0] = 0;
+    sCutsceneVars[2].angle[0] = 0; // wait-for-dialog timeout counter (see cutscene_read_message case 0)
 }
 
 UNUSED static void unused_cam_to_mario(struct Camera *c) {
@@ -9614,7 +9621,22 @@ BAD_RETURN(s32) cutscene_read_message(struct Camera *c) {
         case 0:
             if (get_dialog_id() != DIALOG_NONE) {
                 sCutsceneVars[0].angle[0] += 1;
+                sCutsceneVars[2].angle[0] = 0;
                 //set_time_stop_flags(TIME_STOP_ENABLED | TIME_STOP_DIALOG);
+            } else if (++sCutsceneVars[2].angle[0] > 90) {
+                // Hardening for the softlock documented below: the message never actually appeared
+                // (interaction cancelled, or a dialog closed/reopened on the same frame). Without this
+                // the cutscene waits forever and the camera stays parked at the sign. End it cleanly
+                // through the same restore path the normal exit uses.
+                printf("[SIGNCAM] dialog never opened - ending read-message cutscene\n");
+                gCutsceneTimer = CUTSCENE_LOOP;
+                retrieve_info_star(c);
+                transition_next_state(c, 15);
+                sStatusFlags |= CAM_FLAG_UNUSED_CUTSCENE_ACTIVE;
+                clear_time_stop_flags(TIME_STOP_ENABLED | TIME_STOP_DIALOG);
+                sCUpCameraPitch = sCutsceneVars[1].angle[0];
+                sModeOffsetYaw = sCutsceneVars[1].angle[1];
+                cutscene_unsoften_music(c);
             }
             break;
         // Leave the dialog.
