@@ -4,11 +4,19 @@
 
 VR controllers
 - You can now play with the VR controllers themselves. Quest 3 / Quest 2 /
-  Quest Pro Touch controllers and Index controllers are supported, with a
-  basic fallback for other OpenXR controllers. No gamepad needed.
+  Quest Pro Touch controllers, Index, HP Reverb G2, Windows Mixed Reality
+  and Vive wands all have layouts, with a basic fallback for other OpenXR
+  controllers. No gamepad needed.
 - Default layout: left stick moves, right stick is the camera, A jumps,
-  B punches, left trigger crouches (Z), grips are L and R, the left menu
-  button pauses, and clicking the right stick cycles the VR mode.
+  B punches, left trigger crouches (Z), squeezing either grip grabs and
+  throws objects, the left menu button pauses, and clicking the right
+  stick cycles the VR mode.
+- On Quest 3 the buttons land on the hands they belong to: the native
+  Touch Plus profile is used when the runtime offers it, instead of
+  letting the runtime translate the older Touch layout (which could put
+  buttons on the wrong controller).
+- The camera stick's left/right direction matches what you expect in VR
+  (the flat-gamepad direction read inverted there).
 - The controllers appear to the game as a regular gamepad, so the existing
   control bindings apply and you can rebind everything in Options the same
   way as any controller.
@@ -18,6 +26,8 @@ VR controllers
   so a finger resting on the trigger does not cause inputs.
 - Taking the headset off releases all controller input, and a gamepad can
   stay connected at the same time.
+- The console prints which controller profile each hand bound, which is
+  the first thing to check if a controller misbehaves.
 
 ## v0.4 - 2026-06-09
 

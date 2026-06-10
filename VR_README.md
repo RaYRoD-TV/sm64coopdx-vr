@@ -22,9 +22,8 @@ Run sm64coopdx.exe. Start your VR runtime first (Quest Link, Air Link, Virtual D
 if you want VR. Put your own SM64 US ROM in the folder named baserom.us.z64 (or drag any .z64 onto the
 window). There's no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
 
-You can play with your VR motion controllers (Quest Touch and Index profiles are wired up, with the
-basic OpenXR fallback profile for anything else), or with the usual coopdx input: a gamepad
-(DualSense, DS4, Xbox) or mouse and keyboard. Head tracking drives the view either way.
+You can play with your VR motion controllers, or with the usual coopdx input: a gamepad (DualSense,
+DS4, Xbox) or mouse and keyboard. Head tracking drives the view either way.
 
 ### VR controllers
 
@@ -32,11 +31,27 @@ The motion controllers are read through OpenXR actions and presented to the game
 gamepad in the same virtual keyspace as the SDL backend. That means the stock gamepad bindings give
 the default layout, the rebind menu in Options captures VR buttons the same way it captures gamepad
 buttons, and the in-game menus navigate with stick plus A/B like a gamepad. Defaults: left stick
-moves, right stick is the camera, A jumps, B punches, left trigger is Z, grips are L and R, the left
-controller's menu button pauses, and clicking the right stick cycles the VR mode (it acts as d-pad
-up). Triggers and grips register past 60% travel and release under 40%, so a resting finger can't
-flicker an input. Rumble goes to both hands. Everything releases cleanly when the headset comes off,
-and a gamepad can stay connected at the same time; inputs merge.
+moves, right stick is the camera (its left/right is flipped relative to a flat gamepad, because in
+VR the world rotates around you rather than a camera panning on a screen), A jumps, B punches, left
+trigger is Z, either grip grabs and throws (it acts as B, which is SM64's grab interaction), the
+left controller's menu button pauses, and clicking the right stick cycles the VR mode (it acts as
+d-pad up). Triggers and grips register past 60% travel and release under 40%, so a resting finger
+can't flicker an input. Rumble goes to both hands. Everything releases cleanly when the headset
+comes off, and a gamepad can stay connected at the same time; inputs merge.
+
+Bindings are suggested for these interaction profiles: Quest Touch, Quest 3 / Quest Pro Touch Plus
+(used when the runtime offers it, so buttons land on the right hands without the runtime translating
+the older Touch layout), Valve Index, HP Reverb G2, Windows Mixed Reality wands, Vive wands, and the
+basic khr fallback. Anything else (Pimax included) goes through whichever of those layouts its
+runtime emulates, or the runtime's own rebinding; SteamVR users can also remap everything in the
+SteamVR controller bindings UI since the actions are exposed there with readable names. At boot and
+on any controller change, the console prints which profile each hand actually bound:
+
+    [VR] left controller profile: /interaction_profiles/...
+    [VR] right controller profile: /interaction_profiles/...
+
+If a controller misbehaves (wrong hand, dead buttons), include those two lines in the report; they
+say what the runtime matched, which is where that class of bug lives.
 
 ### VR settings (in-game)
 

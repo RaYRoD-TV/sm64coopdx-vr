@@ -9,7 +9,7 @@
 //   left stick    move            right stick   camera (C buttons)
 //   A             jump (A)        B             punch (B)
 //   left trigger  Z (crouch)      right trigger R
-//   left grip     L               right grip    R
+//   either grip   grab / throw (acts as B)
 //   menu button   Start (pause)   left stick click   Z
 //   right stick click  d-pad up (cycles the VR view mode)
 //
@@ -42,14 +42,14 @@
 #define VBTN_START      6
 #define VBTN_LEFTSTICK  7
 #define VBTN_RIGHTSTICK 8
-#define VBTN_LSHOULDER  9
-#define VBTN_RSHOULDER  10
 #define VBTN_DPAD_UP    11
 #define VBTN_LTRIGGER   (VK_LTRIGGER - VK_BASE_SDL_GAMEPAD)
 #define VBTN_RTRIGGER   (VK_RTRIGGER - VK_BASE_SDL_GAMEPAD)
 
 // Physical control -> virtual gamepad button. The right stick click lands on d-pad up so it
-// cycles the VR view mode through the existing shortcut; everything else mirrors a gamepad.
+// cycles the VR view mode through the existing shortcut. Both grips act as B: in SM64 the grab
+// IS the B interaction, so squeezing near a box or a bob-omb picks it up and squeezing again
+// throws it. Two physical controls mapping to one virtual button just OR together below.
 static const struct { unsigned vrMask; int vbtn; } sVrButtonMap[] = {
     { VR_BTN_A,        VBTN_A },
     { VR_BTN_B,        VBTN_B },
@@ -60,8 +60,8 @@ static const struct { unsigned vrMask; int vbtn; } sVrButtonMap[] = {
     { VR_BTN_RSTICK,   VBTN_DPAD_UP },
     { VR_BTN_LTRIGGER, VBTN_LTRIGGER },
     { VR_BTN_RTRIGGER, VBTN_RTRIGGER },
-    { VR_BTN_LGRIP,    VBTN_LSHOULDER },
-    { VR_BTN_RGRIP,    VBTN_RSHOULDER },
+    { VR_BTN_LGRIP,    VBTN_B },
+    { VR_BTN_RGRIP,    VBTN_B },
 };
 
 static u32  num_vr_binds = 0;
@@ -183,13 +183,15 @@ static void controller_vr_read(OSContPad *pad) {
     else if (ystick == STICK_UP)    { pad->stick_y =  127; }
 
     // Thumbsticks arrive as -1..1 with +y up; convert to the SDL int16 convention (+y down)
-    // so the shared deadzone math and C-button thresholds behave identically.
+    // so the shared deadzone math and C-button thresholds behave identically. The camera X is
+    // negated: the gamepad-style direction reads inverted in VR (the world visibly rotates
+    // around you instead of a camera panning on a screen), so pushing right should look right.
     float ls[2], rs[2];
     vr_controller_stick(0, ls);
     vr_controller_stick(1, rs);
     int16_t leftx  = (int16_t)(ls[0] *  32767.0f);
     int16_t lefty  = (int16_t)(ls[1] * -32767.0f);
-    int16_t rightx = (int16_t)(rs[0] *  32767.0f);
+    int16_t rightx = (int16_t)(rs[0] * -32767.0f);
     int16_t righty = (int16_t)(rs[1] * -32767.0f);
 
     if (rightx < -0x4000) { pad->button |= L_CBUTTONS; }

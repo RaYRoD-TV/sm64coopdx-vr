@@ -98,6 +98,8 @@ static const int   sOverlayW = 1920;
 static const int   sOverlayH = 1080;
 static bool        sHasCylinder = false; // runtime supports the cylinder layer (surround sky)
 static bool        sHasEquirect2 = false; // runtime supports the equirect2 layer (full-sphere sky, no black poles)
+static bool        sHasTouchPlus = false; // runtime knows the Quest 3 / Quest Pro native Touch Plus profile
+static bool        sHasHpMR      = false; // runtime knows the HP Reverb G2 controller profile
 
 // --- Diorama transform tunables ----------------------------------------------
 // The game world (camera space) is shrunk and anchored in front of the seated
@@ -600,6 +602,53 @@ static void vr_input_create(void) {
     };
     vr_suggest_profile("/interaction_profiles/valve/index_controller", index, (int)(sizeof(index) / sizeof(index[0])));
 
+    // Quest 3 / Quest Pro native profile: identical layout to Touch, so the same table applies.
+    // Suggesting it explicitly matters: with only the older Touch bindings suggested, the runtime
+    // auto-translates them onto Touch Plus and that translation can land buttons on the wrong hand.
+    if (sHasTouchPlus) {
+        vr_suggest_profile("/interaction_profiles/meta/touch_controller_plus", touch, (int)(sizeof(touch) / sizeof(touch[0])));
+    }
+
+    // HP Reverb G2: same control set as Touch (a/b right, x/y left, sticks, analog squeeze).
+    if (sHasHpMR) {
+        vr_suggest_profile("/interaction_profiles/hp/mixed_reality_controller", touch, (int)(sizeof(touch) / sizeof(touch[0])));
+    }
+
+    // Windows Mixed Reality wands: sticks and triggers as usual; no face buttons, so the trackpad
+    // clicks stand in for A (right) and B (left). Squeeze is a click on these, not analog.
+    const VrBind wmr[] = {
+        { sActMove,     "/user/hand/left/input/thumbstick" },
+        { sActCam,      "/user/hand/right/input/thumbstick" },
+        { sActBtnA,     "/user/hand/right/input/trackpad/click" },
+        { sActBtnB,     "/user/hand/left/input/trackpad/click" },
+        { sActMenu,     "/user/hand/left/input/menu/click" },
+        { sActLStick,   "/user/hand/left/input/thumbstick/click" },
+        { sActRStick,   "/user/hand/right/input/thumbstick/click" },
+        { sActLTrigger, "/user/hand/left/input/trigger/value" },
+        { sActRTrigger, "/user/hand/right/input/trigger/value" },
+        { sActLGrip,    "/user/hand/left/input/squeeze/click" },
+        { sActRGrip,    "/user/hand/right/input/squeeze/click" },
+        { sActHaptic,   "/user/hand/left/output/haptic" },
+        { sActHaptic,   "/user/hand/right/output/haptic" },
+    };
+    vr_suggest_profile("/interaction_profiles/microsoft/motion_controller", wmr, (int)(sizeof(wmr) / sizeof(wmr[0])));
+
+    // Vive wands: no sticks at all, so the trackpads steer movement and camera. Best-effort.
+    const VrBind vive[] = {
+        { sActMove,     "/user/hand/left/input/trackpad" },
+        { sActCam,      "/user/hand/right/input/trackpad" },
+        { sActBtnA,     "/user/hand/right/input/trackpad/click" },
+        { sActBtnB,     "/user/hand/left/input/trackpad/click" },
+        { sActMenu,     "/user/hand/left/input/menu/click" },
+        { sActLTrigger, "/user/hand/left/input/trigger/value" },
+        { sActRTrigger, "/user/hand/right/input/trigger/value" },
+        { sActLGrip,    "/user/hand/left/input/squeeze/click" },
+        { sActRGrip,    "/user/hand/right/input/squeeze/click" },
+        { sActHaptic,   "/user/hand/left/output/haptic" },
+        { sActHaptic,   "/user/hand/right/output/haptic" },
+    };
+    vr_suggest_profile("/interaction_profiles/htc/vive_controller", vive, (int)(sizeof(vive) / sizeof(vive[0])));
+
     // Bare-minimum fallback profile every runtime understands (select + menu only).
     const VrBind simple[] = {
         { sActBtnA,   "/user/hand/right/input/select/click" },
@@ -616,6 +665,25 @@ static void vr_input_create(void) {
     if (!xrok(xrAttachSessionActionSets(sSession, &sai), "xrAttachSessionActionSets")) { return; }
     sInputAttached = true;
     printf("[VR] motion controllers ready (Quest Touch / Index profiles suggested).\n");
+}
+
+// Print which interaction profile the runtime actually bound for each hand. Fires whenever the
+// runtime reports a profile change; this line is the first thing to check when a controller
+// behaves oddly (wrong hand, dead buttons), since it shows what the runtime matched us to.
+static void vr_log_active_profiles(void) {
+    if (!sInputAttached || sSession == XR_NULL_HANDLE) { return; }
+    static const char *handName[2] = { "left", "right" };
+    for (int h = 0; h < 2; h++) {
+        char buf[XR_MAX_PATH_LENGTH];
+        snprintf(buf, sizeof(buf), "none (not bound)");
+        XrInteractionProfileState ips = { XR_TYPE_INTERACTION_PROFILE_STATE };
+        if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(sSession, sHandPath[h], &ips))
+            && ips.interactionProfile != XR_NULL_PATH) {
+            uint32_t len = 0;
+            xrPathToString(sInstance, ips.interactionProfile, sizeof(buf), &len, buf);
+        }
+        printf("[VR] %s controller profile: %s\n", handName[h], buf);
+    }
 }
 
 static bool vr_action_bool(XrAction a) {
@@ -754,9 +822,13 @@ static void vr_boot(void) {
     if (!sBootRetrying) { printf("[VR] booting OpenXR...\n"); }
     if (!sSettingsLoaded) { sSettingsLoaded = true; vr_settings_load(); } // only the FIRST attempt loads the file; a retry must not clobber live menu edits
 
-    // Opt into the cylinder layer (surround sky) if the runtime offers it.
+    // Opt into the cylinder layer (surround sky) and the extension controller profiles if the
+    // runtime offers them. The controller extensions are name-matched as strings so older OpenXR
+    // headers still compile this file.
     sHasCylinder = false;
     sHasEquirect2 = false;
+    sHasTouchPlus = false;
+    sHasHpMR = false;
     {
         uint32_t ec = 0;
         if (XR_SUCCEEDED(xrEnumerateInstanceExtensionProperties(NULL, 0, &ec, NULL)) && ec > 0) {
@@ -766,15 +838,19 @@ static void vr_boot(void) {
             for (uint32_t i = 0; i < ec; i++) {
                 if (strcmp(ep[i].extensionName, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME)  == 0) sHasCylinder = true;
                 if (strcmp(ep[i].extensionName, XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME) == 0) sHasEquirect2 = true;
+                if (strcmp(ep[i].extensionName, "XR_META_touch_controller_plus")      == 0) sHasTouchPlus = true;
+                if (strcmp(ep[i].extensionName, "XR_EXT_hp_mixed_reality_controller") == 0) sHasHpMR = true;
             }
             free(ep);
         }
     }
-    const char *exts[3];
+    const char *exts[5];
     uint32_t nexts = 0;
     exts[nexts++] = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
     if (sHasCylinder)  exts[nexts++] = XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME;
     if (sHasEquirect2) exts[nexts++] = XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME;
+    if (sHasTouchPlus) exts[nexts++] = "XR_META_touch_controller_plus";
+    if (sHasHpMR)      exts[nexts++] = "XR_EXT_hp_mixed_reality_controller";
     XrInstanceCreateInfo ici = { XR_TYPE_INSTANCE_CREATE_INFO };
     ici.enabledExtensionCount = nexts;
     ici.enabledExtensionNames = exts;
@@ -948,8 +1024,14 @@ static void vr_boot(void) {
 }
 
 static void vr_poll_events(void) {
-    XrEventDataBuffer ev = { XR_TYPE_EVENT_DATA_BUFFER };
-    while (xrPollEvent(sInstance, &ev) == XR_SUCCESS) {
+    for (;;) {
+        // The spec wants the buffer re-tagged as EVENT_DATA_BUFFER before every poll, so it's
+        // declared fresh each pass (the old single-init worked on VDXR but was out of spec).
+        XrEventDataBuffer ev = { XR_TYPE_EVENT_DATA_BUFFER };
+        if (xrPollEvent(sInstance, &ev) != XR_SUCCESS) { break; }
+        if (ev.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            vr_log_active_profiles();
+        }
         if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             const XrEventDataSessionStateChanged *e = (const XrEventDataSessionStateChanged *)&ev;
             sState = e->state;

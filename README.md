@@ -36,8 +36,9 @@ works too: someone can join your IP, or use **Host** to set up a session with th
 
 You play with any of these:
 
-- Your VR controllers (Quest 3 / Quest 2 / Quest Pro Touch controllers, and Index works too). No
-  gamepad needed. See the layout below.
+- Your VR controllers. Quest 3 / Quest 2 / Quest Pro Touch controllers, Index, HP Reverb G2,
+  Windows Mixed Reality and Vive wands all have layouts wired up, and other OpenXR controllers get
+  the runtime's own remapping on top of those. No gamepad needed. See the layout below.
 - Gamepad: DualSense (PS5), DualShock 4 (PS4), Xbox, Switch Pro, or any other SDL-compatible
   controller, wired or over Bluetooth. It uses your existing coopdx control bindings.
 - Mouse and keyboard.
@@ -57,7 +58,7 @@ the normal coopdx bindings and you can change it in Options like any controller:
 | B | Punch (B) |
 | Left trigger | Crouch / ground pound (Z) |
 | Right trigger | R |
-| Grips | L (left) / R (right) |
+| Grips | Grab and throw objects (acts as B) |
 | Menu button (left controller) | Pause (Start) |
 | Right stick click | Cycle the VR mode |
 | X / Y | X / Y |
