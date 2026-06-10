@@ -496,6 +496,8 @@ static XrPath   sHandPath[2]   = { XR_NULL_PATH, XR_NULL_PATH }; // /user/hand/l
 static bool     sInputAttached = false;          // action set attached to the session
 static unsigned sCtrlButtons   = 0;              // VR_BTN_* mask, refreshed each xrSyncActions
 static float    sCtrlStick[2][2] = {{ 0 }};      // [hand][x,y], +x right +y up
+static float    sRumbleAmp     = 0.0f;           // armed rumble amplitude (0 = off)
+static XrTime   sRumbleUntil   = 0;              // stop re-arming past this time (belt and braces)
 
 static XrAction vr_make_action(XrActionType type, const char *name, const char *localized, bool perHand) {
     XrActionCreateInfo aci = { XR_TYPE_ACTION_CREATE_INFO };
@@ -728,10 +730,12 @@ static void vr_input_sync(void) {
     si.countActiveActionSets = 1;
     si.activeActionSets = &active;
     // XR_SESSION_NOT_FOCUSED is a success code that means "no input for you" (headset off, runtime
-    // menu up). Release everything so a button held at that moment can't stay stuck down.
+    // menu up). Release everything so a button held at that moment can't stay stuck down, and
+    // disarm rumble so the controllers don't keep buzzing in their holders.
     if (xrSyncActions(sSession, &si) != XR_SUCCESS) {
         sCtrlButtons = 0;
         memset(sCtrlStick, 0, sizeof(sCtrlStick));
+        sRumbleAmp = 0.0f;
         return;
     }
     unsigned b = 0;
@@ -749,6 +753,26 @@ static void vr_input_sync(void) {
     sCtrlButtons = b;
     vr_action_vec2(sActMove, sCtrlStick[0]);
     vr_action_vec2(sActCam,  sCtrlStick[1]);
+
+    // Haptics: while the game holds the motor on, re-arm a SHORT burst every frame instead of
+    // ever submitting one long vibration. The game's rumble-pak emulation toggles the motor on
+    // and off every frame to fake intensity, and runtimes don't all honor xrStopHapticFeedback
+    // promptly (or at all, over wireless) - a long one-shot buzz that misses its stop can never
+    // be cancelled and the controllers vibrate non stop. Short bursts die on their own right
+    // after the last re-arm, so a lost stop can't strand the motor.
+    if (sRumbleAmp > 0.0f && sActHaptic != XR_NULL_HANDLE
+        && sFrameState.predictedDisplayTime < sRumbleUntil) {
+        XrHapticVibration vib = { XR_TYPE_HAPTIC_VIBRATION };
+        vib.duration  = 60000000; // 60 ms: outlasts one frame, dies fast once re-arming stops
+        vib.frequency = XR_FREQUENCY_UNSPECIFIED;
+        vib.amplitude = sRumbleAmp;
+        for (int h = 0; h < 2; h++) {
+            XrHapticActionInfo hai = { XR_TYPE_HAPTIC_ACTION_INFO };
+            hai.action = sActHaptic;
+            hai.subactionPath = sHandPath[h];
+            xrApplyHapticFeedback(sSession, &hai, (const XrHapticBaseHeader *)&vib);
+        }
+    }
 }
 
 bool vr_controllers_active(void) {
@@ -765,29 +789,28 @@ void vr_controller_stick(int hand, float out[2]) {
     out[1] = sCtrlStick[hand][1];
 }
 
+// Arm the rumble. No vibration is submitted here: vr_input_sync re-arms a short burst each
+// frame while armed, so a runtime that mishandles stop requests can't strand the motor on.
 void vr_controller_rumble(float strength, float seconds) {
     if (!vr_controllers_active() || sActHaptic == XR_NULL_HANDLE) { return; }
     if (strength < 0.0f) { strength = 0.0f; }
     if (strength > 1.0f) { strength = 1.0f; }
-    XrHapticVibration vib = { XR_TYPE_HAPTIC_VIBRATION };
-    vib.duration  = (XrDuration)(seconds * 1e9); // nanoseconds
-    vib.frequency = XR_FREQUENCY_UNSPECIFIED;
-    vib.amplitude = strength;
-    for (int h = 0; h < 2; h++) {
-        XrHapticActionInfo hai = { XR_TYPE_HAPTIC_ACTION_INFO };
-        hai.action = sActHaptic;
-        hai.subactionPath = sHandPath[h];
-        xrApplyHapticFeedback(sSession, &hai, (const XrHapticBaseHeader *)&vib);
-    }
+    sRumbleAmp   = strength;
+    sRumbleUntil = sFrameState.predictedDisplayTime + (XrTime)(seconds * 1e9);
 }
 
 void vr_controller_rumble_stop(void) {
+    // The game's rumble-pak emulation calls stop every idle frame; only talk to the runtime
+    // when we're actually buzzing, so the idle path doesn't spam haptic IPC.
+    if (sRumbleAmp <= 0.0f) { return; }
+    sRumbleAmp   = 0.0f;
+    sRumbleUntil = 0;
     if (!sInputAttached || sSession == XR_NULL_HANDLE || sActHaptic == XR_NULL_HANDLE) { return; }
     for (int h = 0; h < 2; h++) {
         XrHapticActionInfo hai = { XR_TYPE_HAPTIC_ACTION_INFO };
         hai.action = sActHaptic;
         hai.subactionPath = sHandPath[h];
-        xrStopHapticFeedback(sSession, &hai);
+        xrStopHapticFeedback(sSession, &hai); // best effort: cuts the current 60 ms burst short
     }
 }
 
@@ -1805,6 +1828,8 @@ void vr_shutdown(void) {
     sInputAttached = false;
     sCtrlButtons = 0;
     memset(sCtrlStick, 0, sizeof(sCtrlStick));
+    sRumbleAmp = 0.0f;
+    sRumbleUntil = 0;
     if (sInstance   != XR_NULL_HANDLE) { xrDestroyInstance(sInstance); sInstance   = XR_NULL_HANDLE; }
     sRunning = false;
     sFrameBegun = false;

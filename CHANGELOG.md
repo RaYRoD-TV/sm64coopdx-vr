@@ -23,7 +23,10 @@ VR controllers
   speed is reduced so turning is easier to control.
 - Menus navigate with the stick and A/B, like a gamepad, and the triggers
   flip pages in the paginated menus.
-- Rumble plays through both controllers.
+- Rumble plays through both controllers, in short self-expiring pulses so
+  it can never get stuck vibrating non stop (the game toggles the motor
+  every frame like the N64 Rumble Pak, and a lost stop request used to
+  leave a long buzz running with nothing to cancel it).
 - Triggers and grips only register past 60% travel and release under 40%,
   so a finger resting on the trigger does not cause inputs.
 - Taking the headset off releases all controller input, and a gamepad can
