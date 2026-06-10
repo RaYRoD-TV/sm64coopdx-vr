@@ -470,6 +470,259 @@ static int64_t vr_choose_swapchain_format(void) {
     return chosen;
 }
 
+// ---- Motion-controller input (OpenXR actions) --------------------------------
+// One action set covering gameplay: both thumbsticks, the face buttons, the menu button, stick
+// clicks, triggers, grips, and a haptic output per hand. Suggested bindings cover the Quest Touch
+// profile (Quest 2/3/Pro over Link / Air Link / Virtual Desktop), the Index profile, and the khr
+// simple profile as a last resort. controller_vr.c turns this state into the game's pad.
+static XrActionSet sActionSet  = XR_NULL_HANDLE;
+static XrAction sActMove       = XR_NULL_HANDLE; // left thumbstick (vector2)
+static XrAction sActCam        = XR_NULL_HANDLE; // right thumbstick (vector2)
+static XrAction sActBtnA       = XR_NULL_HANDLE;
+static XrAction sActBtnB       = XR_NULL_HANDLE;
+static XrAction sActBtnX       = XR_NULL_HANDLE;
+static XrAction sActBtnY       = XR_NULL_HANDLE;
+static XrAction sActMenu       = XR_NULL_HANDLE;
+static XrAction sActLStick     = XR_NULL_HANDLE; // thumbstick clicks
+static XrAction sActRStick     = XR_NULL_HANDLE;
+static XrAction sActLTrigger   = XR_NULL_HANDLE; // analog 0..1, turned digital here with hysteresis
+static XrAction sActRTrigger   = XR_NULL_HANDLE;
+static XrAction sActLGrip      = XR_NULL_HANDLE;
+static XrAction sActRGrip      = XR_NULL_HANDLE;
+static XrAction sActHaptic     = XR_NULL_HANDLE; // vibration output, per-hand subactions
+static XrPath   sHandPath[2]   = { XR_NULL_PATH, XR_NULL_PATH }; // /user/hand/left, /user/hand/right
+static bool     sInputAttached = false;          // action set attached to the session
+static unsigned sCtrlButtons   = 0;              // VR_BTN_* mask, refreshed each xrSyncActions
+static float    sCtrlStick[2][2] = {{ 0 }};      // [hand][x,y], +x right +y up
+
+static XrAction vr_make_action(XrActionType type, const char *name, const char *localized, bool perHand) {
+    XrActionCreateInfo aci = { XR_TYPE_ACTION_CREATE_INFO };
+    aci.actionType = type;
+    strncpy(aci.actionName, name, XR_MAX_ACTION_NAME_SIZE - 1);
+    strncpy(aci.localizedActionName, localized, XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    if (perHand) { aci.countSubactionPaths = 2; aci.subactionPaths = sHandPath; }
+    XrAction a = XR_NULL_HANDLE;
+    if (!xrok(xrCreateAction(sActionSet, &aci, &a), name)) { return XR_NULL_HANDLE; }
+    return a;
+}
+
+typedef struct { XrAction action; const char *path; } VrBind;
+static void vr_suggest_profile(const char *profilePath, const VrBind *binds, int count) {
+    XrPath profile = XR_NULL_PATH;
+    if (XR_FAILED(xrStringToPath(sInstance, profilePath, &profile))) { return; }
+    XrActionSuggestedBinding sb[32];
+    uint32_t n = 0;
+    for (int i = 0; i < count && n < 32; i++) {
+        if (binds[i].action == XR_NULL_HANDLE) { continue; }
+        XrPath p = XR_NULL_PATH;
+        if (XR_FAILED(xrStringToPath(sInstance, binds[i].path, &p))) { continue; }
+        sb[n].action  = binds[i].action;
+        sb[n].binding = p;
+        n++;
+    }
+    if (n == 0) { return; }
+    XrInteractionProfileSuggestedBinding spb = { XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+    spb.interactionProfile = profile;
+    spb.suggestedBindings = sb;
+    spb.countSuggestedBindings = n;
+    // Not fatal if the runtime rejects a profile it doesn't know; the others still apply.
+    xrok(xrSuggestInteractionProfileBindings(sInstance, &spb), profilePath);
+}
+
+// Create the action set, suggest the per-device bindings and attach to the session. Runs once in
+// vr_boot; any failure leaves VR fully functional, just without motion controllers (gamepad still works).
+static void vr_input_create(void) {
+    sInputAttached = false;
+    sCtrlButtons = 0;
+    memset(sCtrlStick, 0, sizeof(sCtrlStick));
+    xrStringToPath(sInstance, "/user/hand/left",  &sHandPath[0]);
+    xrStringToPath(sInstance, "/user/hand/right", &sHandPath[1]);
+
+    XrActionSetCreateInfo asci = { XR_TYPE_ACTION_SET_CREATE_INFO };
+    strncpy(asci.actionSetName, "gameplay", XR_MAX_ACTION_SET_NAME_SIZE - 1);
+    strncpy(asci.localizedActionSetName, "Gameplay", XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE - 1);
+    if (!xrok(xrCreateActionSet(sInstance, &asci, &sActionSet), "xrCreateActionSet")) {
+        sActionSet = XR_NULL_HANDLE;
+        return;
+    }
+
+    sActMove     = vr_make_action(XR_ACTION_TYPE_VECTOR2F_INPUT,  "move",          "Move",                false);
+    sActCam      = vr_make_action(XR_ACTION_TYPE_VECTOR2F_INPUT,  "camera",        "Camera",              false);
+    sActBtnA     = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "button_a",      "A Button",            false);
+    sActBtnB     = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "button_b",      "B Button",            false);
+    sActBtnX     = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "button_x",      "X Button",            false);
+    sActBtnY     = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "button_y",      "Y Button",            false);
+    sActMenu     = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "menu",          "Pause",               false);
+    sActLStick   = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "left_stick",    "Left Stick Click",    false);
+    sActRStick   = vr_make_action(XR_ACTION_TYPE_BOOLEAN_INPUT,   "right_stick",   "Right Stick Click",   false);
+    sActLTrigger = vr_make_action(XR_ACTION_TYPE_FLOAT_INPUT,     "left_trigger",  "Left Trigger",        false);
+    sActRTrigger = vr_make_action(XR_ACTION_TYPE_FLOAT_INPUT,     "right_trigger", "Right Trigger",       false);
+    sActLGrip    = vr_make_action(XR_ACTION_TYPE_FLOAT_INPUT,     "left_grip",     "Left Grip",           false);
+    sActRGrip    = vr_make_action(XR_ACTION_TYPE_FLOAT_INPUT,     "right_grip",    "Right Grip",          false);
+    sActHaptic   = vr_make_action(XR_ACTION_TYPE_VIBRATION_OUTPUT,"rumble",        "Rumble",              true);
+
+    // Quest Touch (the right controller's Oculus button is reserved by the system, so it isn't bound).
+    const VrBind touch[] = {
+        { sActMove,     "/user/hand/left/input/thumbstick" },
+        { sActCam,      "/user/hand/right/input/thumbstick" },
+        { sActBtnA,     "/user/hand/right/input/a/click" },
+        { sActBtnB,     "/user/hand/right/input/b/click" },
+        { sActBtnX,     "/user/hand/left/input/x/click" },
+        { sActBtnY,     "/user/hand/left/input/y/click" },
+        { sActMenu,     "/user/hand/left/input/menu/click" },
+        { sActLStick,   "/user/hand/left/input/thumbstick/click" },
+        { sActRStick,   "/user/hand/right/input/thumbstick/click" },
+        { sActLTrigger, "/user/hand/left/input/trigger/value" },
+        { sActRTrigger, "/user/hand/right/input/trigger/value" },
+        { sActLGrip,    "/user/hand/left/input/squeeze/value" },
+        { sActRGrip,    "/user/hand/right/input/squeeze/value" },
+        { sActHaptic,   "/user/hand/left/output/haptic" },
+        { sActHaptic,   "/user/hand/right/output/haptic" },
+    };
+    vr_suggest_profile("/interaction_profiles/oculus/touch_controller", touch, (int)(sizeof(touch) / sizeof(touch[0])));
+
+    // Valve Index: same layout, but A/B exist on both hands and there's no menu button.
+    const VrBind index[] = {
+        { sActMove,     "/user/hand/left/input/thumbstick" },
+        { sActCam,      "/user/hand/right/input/thumbstick" },
+        { sActBtnA,     "/user/hand/right/input/a/click" },
+        { sActBtnB,     "/user/hand/right/input/b/click" },
+        { sActBtnX,     "/user/hand/left/input/a/click" },
+        { sActBtnY,     "/user/hand/left/input/b/click" },
+        { sActLStick,   "/user/hand/left/input/thumbstick/click" },
+        { sActRStick,   "/user/hand/right/input/thumbstick/click" },
+        { sActLTrigger, "/user/hand/left/input/trigger/value" },
+        { sActRTrigger, "/user/hand/right/input/trigger/value" },
+        { sActLGrip,    "/user/hand/left/input/squeeze/value" },
+        { sActRGrip,    "/user/hand/right/input/squeeze/value" },
+        { sActHaptic,   "/user/hand/left/output/haptic" },
+        { sActHaptic,   "/user/hand/right/output/haptic" },
+    };
+    vr_suggest_profile("/interaction_profiles/valve/index_controller", index, (int)(sizeof(index) / sizeof(index[0])));
+
+    // Bare-minimum fallback profile every runtime understands (select + menu only).
+    const VrBind simple[] = {
+        { sActBtnA,   "/user/hand/right/input/select/click" },
+        { sActBtnB,   "/user/hand/left/input/select/click" },
+        { sActMenu,   "/user/hand/left/input/menu/click" },
+        { sActHaptic, "/user/hand/left/output/haptic" },
+        { sActHaptic, "/user/hand/right/output/haptic" },
+    };
+    vr_suggest_profile("/interaction_profiles/khr/simple_controller", simple, (int)(sizeof(simple) / sizeof(simple[0])));
+
+    XrSessionActionSetsAttachInfo sai = { XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
+    sai.countActionSets = 1;
+    sai.actionSets = &sActionSet;
+    if (!xrok(xrAttachSessionActionSets(sSession, &sai), "xrAttachSessionActionSets")) { return; }
+    sInputAttached = true;
+    printf("[VR] motion controllers ready (Quest Touch / Index profiles suggested).\n");
+}
+
+static bool vr_action_bool(XrAction a) {
+    if (a == XR_NULL_HANDLE) { return false; }
+    XrActionStateGetInfo gi = { XR_TYPE_ACTION_STATE_GET_INFO };
+    gi.action = a;
+    XrActionStateBoolean st = { XR_TYPE_ACTION_STATE_BOOLEAN };
+    return XR_SUCCEEDED(xrGetActionStateBoolean(sSession, &gi, &st)) && st.isActive && st.currentState;
+}
+
+static float vr_action_float(XrAction a) {
+    if (a == XR_NULL_HANDLE) { return 0.0f; }
+    XrActionStateGetInfo gi = { XR_TYPE_ACTION_STATE_GET_INFO };
+    gi.action = a;
+    XrActionStateFloat st = { XR_TYPE_ACTION_STATE_FLOAT };
+    if (XR_FAILED(xrGetActionStateFloat(sSession, &gi, &st)) || !st.isActive) { return 0.0f; }
+    return st.currentState;
+}
+
+static void vr_action_vec2(XrAction a, float out[2]) {
+    out[0] = out[1] = 0.0f;
+    if (a == XR_NULL_HANDLE) { return; }
+    XrActionStateGetInfo gi = { XR_TYPE_ACTION_STATE_GET_INFO };
+    gi.action = a;
+    XrActionStateVector2f st = { XR_TYPE_ACTION_STATE_VECTOR2F };
+    if (XR_FAILED(xrGetActionStateVector2f(sSession, &gi, &st)) || !st.isActive) { return; }
+    out[0] = st.currentState.x;
+    out[1] = st.currentState.y;
+}
+
+// Analog trigger/grip to a digital button with hysteresis: press past 60%, release under 40%,
+// so a finger resting lightly on the trigger can't flicker the bound action.
+static bool vr_analog_latch(float v, bool held) {
+    return held ? (v > 0.4f) : (v > 0.6f);
+}
+
+// Pull fresh controller state from the runtime. Once per frame, from vr_begin_frame.
+static void vr_input_sync(void) {
+    if (!sInputAttached) { return; }
+    XrActiveActionSet active = { sActionSet, XR_NULL_PATH };
+    XrActionsSyncInfo si = { XR_TYPE_ACTIONS_SYNC_INFO };
+    si.countActiveActionSets = 1;
+    si.activeActionSets = &active;
+    // XR_SESSION_NOT_FOCUSED is a success code that means "no input for you" (headset off, runtime
+    // menu up). Release everything so a button held at that moment can't stay stuck down.
+    if (xrSyncActions(sSession, &si) != XR_SUCCESS) {
+        sCtrlButtons = 0;
+        memset(sCtrlStick, 0, sizeof(sCtrlStick));
+        return;
+    }
+    unsigned b = 0;
+    if (vr_action_bool(sActBtnA))   { b |= VR_BTN_A; }
+    if (vr_action_bool(sActBtnB))   { b |= VR_BTN_B; }
+    if (vr_action_bool(sActBtnX))   { b |= VR_BTN_X; }
+    if (vr_action_bool(sActBtnY))   { b |= VR_BTN_Y; }
+    if (vr_action_bool(sActMenu))   { b |= VR_BTN_MENU; }
+    if (vr_action_bool(sActLStick)) { b |= VR_BTN_LSTICK; }
+    if (vr_action_bool(sActRStick)) { b |= VR_BTN_RSTICK; }
+    if (vr_analog_latch(vr_action_float(sActLTrigger), sCtrlButtons & VR_BTN_LTRIGGER)) { b |= VR_BTN_LTRIGGER; }
+    if (vr_analog_latch(vr_action_float(sActRTrigger), sCtrlButtons & VR_BTN_RTRIGGER)) { b |= VR_BTN_RTRIGGER; }
+    if (vr_analog_latch(vr_action_float(sActLGrip),    sCtrlButtons & VR_BTN_LGRIP))    { b |= VR_BTN_LGRIP; }
+    if (vr_analog_latch(vr_action_float(sActRGrip),    sCtrlButtons & VR_BTN_RGRIP))    { b |= VR_BTN_RGRIP; }
+    sCtrlButtons = b;
+    vr_action_vec2(sActMove, sCtrlStick[0]);
+    vr_action_vec2(sActCam,  sCtrlStick[1]);
+}
+
+bool vr_controllers_active(void) {
+    return sInputAttached && sRunning && sState == XR_SESSION_STATE_FOCUSED;
+}
+
+unsigned vr_controller_buttons(void) {
+    return vr_controllers_active() ? sCtrlButtons : 0;
+}
+
+void vr_controller_stick(int hand, float out[2]) {
+    if (!vr_controllers_active() || hand < 0 || hand > 1) { out[0] = out[1] = 0.0f; return; }
+    out[0] = sCtrlStick[hand][0];
+    out[1] = sCtrlStick[hand][1];
+}
+
+void vr_controller_rumble(float strength, float seconds) {
+    if (!vr_controllers_active() || sActHaptic == XR_NULL_HANDLE) { return; }
+    if (strength < 0.0f) { strength = 0.0f; }
+    if (strength > 1.0f) { strength = 1.0f; }
+    XrHapticVibration vib = { XR_TYPE_HAPTIC_VIBRATION };
+    vib.duration  = (XrDuration)(seconds * 1e9); // nanoseconds
+    vib.frequency = XR_FREQUENCY_UNSPECIFIED;
+    vib.amplitude = strength;
+    for (int h = 0; h < 2; h++) {
+        XrHapticActionInfo hai = { XR_TYPE_HAPTIC_ACTION_INFO };
+        hai.action = sActHaptic;
+        hai.subactionPath = sHandPath[h];
+        xrApplyHapticFeedback(sSession, &hai, (const XrHapticBaseHeader *)&vib);
+    }
+}
+
+void vr_controller_rumble_stop(void) {
+    if (!sInputAttached || sSession == XR_NULL_HANDLE || sActHaptic == XR_NULL_HANDLE) { return; }
+    for (int h = 0; h < 2; h++) {
+        XrHapticActionInfo hai = { XR_TYPE_HAPTIC_ACTION_INFO };
+        hai.action = sActHaptic;
+        hai.subactionPath = sHandPath[h];
+        xrStopHapticFeedback(sSession, &hai);
+    }
+}
+
 // Lightweight startup probe: is a VR headset actually connected right now? Creates a
 // throwaway OpenXR instance (no graphics binding, so no GL context required) and asks for
 // an HMD system. Enabling XR_KHR_opengl means a runtime that can't do GL fails here and we
@@ -687,6 +940,8 @@ static void vr_boot(void) {
         xrEnumerateSwapchainImages(sHud.handle, hn, &hn, (XrSwapchainImageBaseHeader *)sHud.images);
         sHud.imgCount = hn;
     }
+
+    vr_input_create(); // motion controllers (failure leaves VR up, just gamepad-only)
 
     printf("[VR] OpenXR ready; waiting for session to start.\n");
     printf("[VRBUILD] v0.4: per-preset-memory + diorama-1376 + paginated-vr-menu + theater-hidden (if you don't see this line, you are running an OLD exe)\n");
@@ -1074,6 +1329,8 @@ void vr_begin_frame(void) {
     sPanelMode = false;
     if (!sRunning) return;
 
+    vr_input_sync(); // refresh motion-controller state for this frame
+
     XrFrameWaitInfo fwi = { XR_TYPE_FRAME_WAIT_INFO };
     sFrameState.type = XR_TYPE_FRAME_STATE;
     sFrameState.next = NULL;
@@ -1460,6 +1717,12 @@ void vr_shutdown(void) {
     }
     if (sLocalSpace != XR_NULL_HANDLE) { xrDestroySpace(sLocalSpace); sLocalSpace = XR_NULL_HANDLE; }
     if (sSession    != XR_NULL_HANDLE) { xrDestroySession(sSession);  sSession    = XR_NULL_HANDLE; }
+    if (sActionSet  != XR_NULL_HANDLE) { xrDestroyActionSet(sActionSet); sActionSet = XR_NULL_HANDLE; } // also destroys its actions
+    sActMove = sActCam = sActBtnA = sActBtnB = sActBtnX = sActBtnY = sActMenu = XR_NULL_HANDLE;
+    sActLStick = sActRStick = sActLTrigger = sActRTrigger = sActLGrip = sActRGrip = sActHaptic = XR_NULL_HANDLE;
+    sInputAttached = false;
+    sCtrlButtons = 0;
+    memset(sCtrlStick, 0, sizeof(sCtrlStick));
     if (sInstance   != XR_NULL_HANDLE) { xrDestroyInstance(sInstance); sInstance   = XR_NULL_HANDLE; }
     sRunning = false;
     sFrameBegun = false;
@@ -1511,6 +1774,11 @@ void  vr_set_panel_mode(bool on) { (void)on; }
 void  vr_set_panel_full_frame(bool full) { (void)full; }
 bool  vr_begin_panel(void)   { return false; }
 void  vr_end_panel(void)     {}
+bool     vr_controllers_active(void) { return false; }
+unsigned vr_controller_buttons(void) { return 0; }
+void     vr_controller_stick(int hand, float out[2]) { (void)hand; out[0] = out[1] = 0.0f; }
+void     vr_controller_rumble(float strength, float seconds) { (void)strength; (void)seconds; }
+void     vr_controller_rumble_stop(void) {}
 void  vr_shutdown(void)      {}
 
 #endif

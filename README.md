@@ -34,15 +34,37 @@ works too: someone can join your IP, or use **Host** to set up a session with th
 
 ## Controls
 
-You play with the same input sm64coopdx normally uses:
+You play with any of these:
 
+- Your VR controllers (Quest 3 / Quest 2 / Quest Pro Touch controllers, and Index works too). No
+  gamepad needed. See the layout below.
 - Gamepad: DualSense (PS5), DualShock 4 (PS4), Xbox, Switch Pro, or any other SDL-compatible
   controller, wired or over Bluetooth. It uses your existing coopdx control bindings.
 - Mouse and keyboard.
 
-In VR your head moves the view on top of that. Real VR motion-controller support isn't done yet, so
-for now movement and buttons come from the gamepad or keyboard exactly like the flat game, and the
-headset just drives where you look.
+In VR your head moves the view on top of whichever input you use.
+
+### VR controller layout
+
+The VR controllers show up to the game as a regular gamepad, so the default layout below comes from
+the normal coopdx bindings and you can change it in Options like any controller:
+
+| Control | Does |
+| --- | --- |
+| Left stick | Move |
+| Right stick | Camera (C buttons) |
+| A | Jump (A) |
+| B | Punch (B) |
+| Left trigger | Crouch / ground pound (Z) |
+| Right trigger | R |
+| Grips | L (left) / R (right) |
+| Menu button (left controller) | Pause (Start) |
+| Right stick click | Cycle the VR mode |
+| X / Y | X / Y |
+
+Menus work with it too: move the cursor with a stick, A to select, B to go back. Rumble plays
+through the controllers. The Oculus button on the right controller belongs to the system and can't
+be bound.
 
 ### VR menu
 

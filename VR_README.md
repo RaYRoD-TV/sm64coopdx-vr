@@ -22,9 +22,21 @@ Run sm64coopdx.exe. Start your VR runtime first (Quest Link, Air Link, Virtual D
 if you want VR. Put your own SM64 US ROM in the folder named baserom.us.z64 (or drag any .z64 onto the
 window). There's no Nintendo data in the exe; it reads the rom at startup the same way normal coopdx does.
 
-You actually play with the usual coopdx input: a gamepad (DualSense, DS4, Xbox) or mouse and keyboard.
-Head tracking drives the view. VR motion controllers aren't hooked up yet, so for now movement and
-buttons come from the controller or keyboard like the flat game.
+You can play with your VR motion controllers (Quest Touch and Index profiles are wired up, with the
+basic OpenXR fallback profile for anything else), or with the usual coopdx input: a gamepad
+(DualSense, DS4, Xbox) or mouse and keyboard. Head tracking drives the view either way.
+
+### VR controllers
+
+The motion controllers are read through OpenXR actions and presented to the game as a standard
+gamepad in the same virtual keyspace as the SDL backend. That means the stock gamepad bindings give
+the default layout, the rebind menu in Options captures VR buttons the same way it captures gamepad
+buttons, and the in-game menus navigate with stick plus A/B like a gamepad. Defaults: left stick
+moves, right stick is the camera, A jumps, B punches, left trigger is Z, grips are L and R, the left
+controller's menu button pauses, and clicking the right stick cycles the VR mode (it acts as d-pad
+up). Triggers and grips register past 60% travel and release under 40%, so a resting finger can't
+flicker an input. Rumble goes to both hands. Everything releases cleanly when the headset comes off,
+and a gamepad can stay connected at the same time; inputs merge.
 
 ### VR settings (in-game)
 
@@ -64,7 +76,11 @@ The person you share with brings their own rom either way.
 
 - src/pc/vr/vr.c, vr.h - the OpenXR work: session setup, per-eye view/projection matrices, stereo,
   head-tracking damping, the sky-dome matrix, the menu panel, the geometry anti-clip, the F10 view
-  cycle, frame submit, and the startup headset check.
+  cycle, frame submit, the startup headset check, and the motion-controller actions (bindings,
+  per-frame sync, haptics).
+- src/pc/controller/controller_vr.c - the VR controllers as a game controller: maps the OpenXR
+  action state onto the pad and the menu input, sharing the SDL gamepad keyspace so the normal
+  bindings and rebind UI apply.
 - src/pc/gfx/gfx_pc.c, gfx_opengl.c - the per-eye / sky-dome / flat-panel render paths.
 - src/game/skybox.c - builds the 3D sky sphere for VR.
 - src/pc/pc_main.c - the VR frame loop and the auto-detect.
@@ -73,8 +89,9 @@ The person you share with brings their own rom either way.
 
 ## Still rough
 
-It's beta. VR motion controllers aren't wired up yet, so you play with a normal gamepad or keyboard
-and head tracking handles the view. A few of the flat screens may want their panel distance nudged.
-Worth testing across different levels and runtimes. A Theater mode (the flat game on a big
+It's beta. Motion controllers cover buttons, sticks, triggers, grips and rumble; there are no
+tracked hands or pointer-based menu aiming yet, so menus navigate gamepad-style with the stick.
+A few of the flat screens may want their panel distance nudged. Worth testing across different
+levels and runtimes. A Theater mode (the flat game on a big
 world-locked screen, with an optional image backdrop) exists in the code but is hidden until it's
 finished - see VR_THEATER_ENABLED in src/pc/vr/vr.h.

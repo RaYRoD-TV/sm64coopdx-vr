@@ -100,6 +100,30 @@ void  vr_set_panel_full_frame(bool full); // crop: true=full 16:9 (in-game menus
 bool  vr_begin_panel(void);       // acquire + bind the panel render target (the HUD swapchain)
 void  vr_end_panel(void);         // release the panel image (submitted as the sole opaque quad)
 
+// VR motion controllers (OpenXR actions: Quest Touch, Index, and the basic fallback profile).
+// vr.c owns the OpenXR action machinery and exposes the polled state here; controller_vr.c maps
+// it onto the game's pad in the same virtual keyspace as the SDL gamepad, so the normal binds,
+// the rebind menu and the DJUI menus all work unchanged. Triggers and grips arrive pre-thresholded
+// (press past 60%, release under 40%) so a soft rest on the trigger can't flicker the button.
+enum VrControllerButton {
+    VR_BTN_A        = (1 <<  0), // right controller A
+    VR_BTN_B        = (1 <<  1), // right controller B
+    VR_BTN_X        = (1 <<  2), // left controller X
+    VR_BTN_Y        = (1 <<  3), // left controller Y
+    VR_BTN_MENU     = (1 <<  4), // left controller menu button
+    VR_BTN_LSTICK   = (1 <<  5), // left thumbstick click
+    VR_BTN_RSTICK   = (1 <<  6), // right thumbstick click
+    VR_BTN_LTRIGGER = (1 <<  7), // left index trigger
+    VR_BTN_RTRIGGER = (1 <<  8), // right index trigger
+    VR_BTN_LGRIP    = (1 <<  9), // left grip squeeze
+    VR_BTN_RGRIP    = (1 << 10), // right grip squeeze
+};
+bool     vr_controllers_active(void);  // actions attached and the session is focused (controllers usable)
+unsigned vr_controller_buttons(void);  // VR_BTN_* mask of currently-held buttons
+void     vr_controller_stick(int hand, float out[2]); // 0=left 1=right; +x right, +y up, each -1..1
+void     vr_controller_rumble(float strength, float seconds); // haptic pulse on both hands (0-1 strength)
+void     vr_controller_rumble_stop(void);
+
 // Headset orientation offsets (radians) from facing forward - used to world-lock the skybox.
 float vr_head_yaw_rad(void);
 float vr_head_pitch_rad(void);

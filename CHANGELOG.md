@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.5 - 2026-06-10
+
+VR controllers
+- You can now play with the VR controllers themselves. Quest 3 / Quest 2 /
+  Quest Pro Touch controllers and Index controllers are supported, with a
+  basic fallback for other OpenXR controllers. No gamepad needed.
+- Default layout: left stick moves, right stick is the camera, A jumps,
+  B punches, left trigger crouches (Z), grips are L and R, the left menu
+  button pauses, and clicking the right stick cycles the VR mode.
+- The controllers appear to the game as a regular gamepad, so the existing
+  control bindings apply and you can rebind everything in Options the same
+  way as any controller.
+- Menus navigate with the stick and A/B, like a gamepad.
+- Rumble plays through both controllers.
+- Triggers and grips only register past 60% travel and release under 40%,
+  so a finger resting on the trigger does not cause inputs.
+- Taking the headset off releases all controller input, and a gamepad can
+  stay connected at the same time.
+
 ## v0.4 - 2026-06-09
 
 VR
