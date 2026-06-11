@@ -54,10 +54,16 @@ First person
   the camera shake that could fire in the last moments before the fade are
   gone, and the fall-out look-up rides through that touchdown instead of
   tipping back down mid-fade.
-- The melee lean is gentler: it eases up to its peak about a third into the
-  swing instead of stepping there almost instantly, and the peak angle is
-  smaller. The old curve read as a jolt rather than a lean, especially in the
-  headset, and melee fires constantly.
+- The melee lean is now genuinely subtle: about 7 degrees at its peak, and the
+  lean is smoothed across the whole combo - each hit used to restart its own
+  lean curve, which stepped the view partway back between hits and read as
+  rocking when mashing B. Now a combo reads as one continuous gentle lean that
+  eases away after the last hit.
+- The camera stick (right stick) got a proper response curve: fine and
+  comfortable near the center, ramping smoothly to FULL turn speed at full
+  deflection. The old flat scale capped the top speed at about half of what
+  the stick could ask for, which made the camera feel both slow and limited
+  in range.
 
 ## v0.5 - 2026-06-10
 

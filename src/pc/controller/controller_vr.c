@@ -8,8 +8,8 @@
 // controllers in ways that look like wrong-hand bugs. The pad is what gameplay and the DJUI
 // menus read, so everything below works the same for every config:
 //
-//   left stick    move                 right stick   camera (C buttons; analog look is scaled
-//                                                    down, see VR_CAM_STICK_SCALE)
+//   left stick    move                 right stick   camera (C buttons; analog look runs a response
+//                                                    curve, see VR_CAM_STICK_CENTER_RESPONSE)
 //   A             jump (A)             B             punch (B)
 //   left trigger  crouch (Z)           right trigger R (and next page in menus)
 //   either grip   grab / throw (B, only while something grabbable is in reach - never punches air)
@@ -49,10 +49,14 @@
 
 #define MAX_VRBUTTONS 32 // virtual button indices, including the trigger virtual keys (0x1A/0x1B)
 
-// How much of the camera stick's deflection reaches the analog look (free cam, first person).
-// 1.0 was too fast in the headset. Only the analog path is scaled; the C-button thresholds
-// still trip at the same physical deflection.
-#define VR_CAM_STICK_SCALE 0.55f
+// Camera stick response curve (the analog look: free cam, first person). Near the center the
+// response is eased down for fine, comfortable aiming; it ramps up smoothly with deflection and
+// reaches FULL speed at the edge. The old flat 0.55x scale was the worst of both - fine aim
+// still moved at over half speed, and the top turn speed was capped at barely half of what the
+// stick can ask for, which read as a limited range. Only the analog path is shaped; the
+// C-button thresholds still trip at the same physical deflection.
+// response = CENTER + (1 - CENTER) * deflection, applied radially so diagonals feel the same.
+#define VR_CAM_STICK_CENTER_RESPONSE 0.30f
 
 // Virtual key indices in the SDL gamepad keyspace (SDL_GameControllerButton values), used for
 // the DJUI key events and bind capture only - the gameplay mapping is the pad table below.
@@ -221,8 +225,13 @@ static void controller_vr_read(OSContPad *pad) {
     s8 camx = 0, camy = 0;
     vr_update_analog_stick(&camx, &camy, rightx, righty);
     if (camx || camy) {
-        pad->ext_stick_x = (s8)(camx * VR_CAM_STICK_SCALE);
-        pad->ext_stick_y = (s8)(camy * VR_CAM_STICK_SCALE);
+        f32 nx = (f32)camx / 127.0f;
+        f32 ny = (f32)camy / 127.0f;
+        f32 mag = sqrtf(nx * nx + ny * ny);
+        if (mag > 1.0f) { mag = 1.0f; }
+        f32 response = VR_CAM_STICK_CENTER_RESPONSE + (1.0f - VR_CAM_STICK_CENTER_RESPONSE) * mag;
+        pad->ext_stick_x = (s8)(camx * response);
+        pad->ext_stick_y = (s8)(camy * response);
     }
 }
 

@@ -395,18 +395,24 @@ s16 first_person_flip_roll(struct MarioState *m) {
     }
     sPrevAction = m->action;
 
+    // Game-frame delta for the time-based easings below (the fall-out ramp, the melee lean smoothing).
+    // In VR this function runs once per RENDER frame - several times per game frame - so time-based
+    // motion advances by game frames instead of by call count.
+    static u32 sPrevGlobalTimer = 0;
+    u32 frameDelta;
+    {
+        extern u32 gGlobalTimer; // game_init.h
+        frameDelta = gGlobalTimer - sPrevGlobalTimer;
+        sPrevGlobalTimer = gGlobalTimer;
+        if (frameDelta > 4) { frameDelta = 4; } // first call, or the toggle was off for a while
+    }
+
     // Falling out of the level: once the only floor below Mario is the death plane, the fall is already
     // fatal. Ease the view up toward the level shrinking away above you and hold it there until the
     // death warp - a last look at where you fell from. Time-based (the freefall anims loop or hold, so
-    // animation progress can't drive it) and advanced by GAME frames, so the VR render rate - which
-    // calls this several times per game frame - doesn't change its speed.
+    // animation progress can't drive it).
     static f32 sFallOutRamp = 0.0f;
-    static u32 sFallOutPrevTimer = 0;
     {
-        extern u32 gGlobalTimer; // game_init.h
-        u32 elapsed = gGlobalTimer - sFallOutPrevTimer;
-        sFallOutPrevTimer = gGlobalTimer;
-        if (elapsed > 4) { elapsed = 4; } // first call, or the toggle was off for a while
         // Engages while falling over the death plane; once engaged it HOLDS as long as the death plane
         // is still the floor - the warp fires above the plane but Mario can physically touch down on it
         // before the fade finishes, and the look-up should ride through that landing, not tip back down
@@ -414,7 +420,7 @@ s16 first_person_flip_roll(struct MarioState *m) {
         bool overDeathPlane = m->floor != NULL && m->floor->type == SURFACE_DEATH_PLANE;
         bool fallingOut = overDeathPlane
                        && (((m->action & ACT_FLAG_AIR) && m->vel[1] < 0.0f) || sFallOutRamp > 0.0f);
-        sFallOutRamp += (fallingOut ? 1.0f : -2.0f) * (f32)elapsed / 45.0f; // ~1.5s up, faster back out
+        sFallOutRamp += (fallingOut ? 1.0f : -2.0f) * (f32)frameDelta / 45.0f; // ~1.5s up, faster back out
         if (sFallOutRamp < 0.0f) { sFallOutRamp = 0.0f; }
         if (sFallOutRamp > 1.0f) { sFallOutRamp = 1.0f; }
     }
@@ -493,32 +499,30 @@ s16 first_person_flip_roll(struct MarioState *m) {
     }
 
     s16 actionAngle = 0;
+    f32 strikeTarget = 0.0f; // melee lean target; smoothed across game frames below, never applied raw
     struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
     if (flips && a->curAnim != NULL && a->curAnim->loopEnd > 1) {
         f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
         if (progress < 0.0f) { progress = 0.0f; }
         if (progress > 1.0f) { progress = 1.0f; }
 
-        if (tipPeak != 0) {
+        if (tipPeak != 0 && strike) {
+            // Strike envelope: smoothstep up to the peak about a third into the swing, smoothstep
+            // back down through the follow-through. Feeds the low-pass below, not the view directly.
             f32 tip;
-            if (strike) {
-                // Strike envelope: smoothstep up to the peak about a third into the swing, smoothstep
-                // back down through the follow-through. (An earlier curve - half sine over the square
-                // root of progress - reached a third of its peak within the first frame; that step read
-                // as a jolt rather than a lean, especially in a headset.)
-                if (progress < 0.32f) {
-                    f32 t = progress / 0.32f;
-                    tip = t * t * (3.0f - 2.0f * t);
-                } else {
-                    f32 t = (progress - 0.32f) / 0.68f;
-                    tip = 1.0f - t * t * (3.0f - 2.0f * t);
-                }
+            if (progress < 0.32f) {
+                f32 t = progress / 0.32f;
+                tip = t * t * (3.0f - 2.0f * t);
             } else {
-                // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
-                // so a hit or a lunge moves the view without ever flipping the world - and an animation that
-                // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
-                tip = sins((s16)(progress * 32768.0f));
+                f32 t = (progress - 0.32f) / 0.68f;
+                tip = 1.0f - t * t * (3.0f - 2.0f * t);
             }
+            strikeTarget = tip * dir * (f32)tipPeak;
+        } else if (tipPeak != 0) {
+            // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
+            // so a hit or a lunge moves the view without ever flipping the world - and an animation that
+            // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
+            f32 tip = sins((s16)(progress * 32768.0f));
             actionAngle = (s16)(tip * dir * (f32)tipPeak);
         } else if (holdPeak != 0) {
             // Death tip: eases over with the animation and STAYS there (the death anims hold their last
@@ -536,6 +540,17 @@ s16 first_person_flip_roll(struct MarioState *m) {
             actionAngle = (s16)(eased * dir * 65536.0f);
         }
     }
+
+    // Melee lean smoothing: the punch combo swaps animations per hit, which restarts the envelope and
+    // used to STEP the lean partway back to zero between hits - mashing B read as the view rocking.
+    // A short low-pass (advanced by game frames) carries the lean across the swaps, so a combo reads
+    // as one continuous, subtle lean that eases away after the last hit.
+    static f32 sStrikeLean = 0.0f;
+    for (u32 i = 0; i < frameDelta; i++) {
+        sStrikeLean += (strikeTarget - sStrikeLean) * 0.25f;
+    }
+    if (strikeTarget == 0.0f && sStrikeLean > -16.0f && sStrikeLean < 16.0f) { sStrikeLean = 0.0f; }
+    actionAngle = (s16)((f32)actionAngle + sStrikeLean);
 
     // Blend toward the fall-out-of-level look-up; it wins over whatever action carried you off the edge.
     if (sFallOutRamp > 0.001f) {

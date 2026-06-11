@@ -29,10 +29,10 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..0380b738a
+index 000000000..652dec730
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,203 @@
 +# Changelog
 +
 +## Unreleased
@@ -89,10 +89,16 @@ index 000000000..0380b738a
 +  the camera shake that could fire in the last moments before the fade are
 +  gone, and the fall-out look-up rides through that touchdown instead of
 +  tipping back down mid-fade.
-+- The melee lean is gentler: it eases up to its peak about a third into the
-+  swing instead of stepping there almost instantly, and the peak angle is
-+  smaller. The old curve read as a jolt rather than a lean, especially in the
-+  headset, and melee fires constantly.
++- The melee lean is now genuinely subtle: about 7 degrees at its peak, and the
++  lean is smoothed across the whole combo - each hit used to restart its own
++  lean curve, which stepped the view partway back between hits and read as
++  rocking when mashing B. Now a combo reads as one continuous gentle lean that
++  eases away after the last hit.
++- The camera stick (right stick) got a proper response curve: fine and
++  comfortable near the center, ramping smoothly to FULL turn speed at full
++  deflection. The old flat scale capped the top speed at about half of what
++  the stick could ask for, which made the camera feel both slow and limited
++  in range.
 +
 +## v0.5 - 2026-06-10
 +
@@ -1016,7 +1022,7 @@ index 5406e94eb..ea0c75e5c 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22b7..7d2c9c2b3 100644
+index 4bfed22b7..0aad6a453 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
 @@ -9,12 +9,14 @@
@@ -1316,7 +1322,7 @@ index 4bfed22b7..7d2c9c2b3 100644
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +354,213 @@ void first_person_reset(void) {
+@@ -201,3 +354,228 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -1361,18 +1367,24 @@ index 4bfed22b7..7d2c9c2b3 100644
 +    }
 +    sPrevAction = m->action;
 +
++    // Game-frame delta for the time-based easings below (the fall-out ramp, the melee lean smoothing).
++    // In VR this function runs once per RENDER frame - several times per game frame - so time-based
++    // motion advances by game frames instead of by call count.
++    static u32 sPrevGlobalTimer = 0;
++    u32 frameDelta;
++    {
++        extern u32 gGlobalTimer; // game_init.h
++        frameDelta = gGlobalTimer - sPrevGlobalTimer;
++        sPrevGlobalTimer = gGlobalTimer;
++        if (frameDelta > 4) { frameDelta = 4; } // first call, or the toggle was off for a while
++    }
++
 +    // Falling out of the level: once the only floor below Mario is the death plane, the fall is already
 +    // fatal. Ease the view up toward the level shrinking away above you and hold it there until the
 +    // death warp - a last look at where you fell from. Time-based (the freefall anims loop or hold, so
-+    // animation progress can't drive it) and advanced by GAME frames, so the VR render rate - which
-+    // calls this several times per game frame - doesn't change its speed.
++    // animation progress can't drive it).
 +    static f32 sFallOutRamp = 0.0f;
-+    static u32 sFallOutPrevTimer = 0;
 +    {
-+        extern u32 gGlobalTimer; // game_init.h
-+        u32 elapsed = gGlobalTimer - sFallOutPrevTimer;
-+        sFallOutPrevTimer = gGlobalTimer;
-+        if (elapsed > 4) { elapsed = 4; } // first call, or the toggle was off for a while
 +        // Engages while falling over the death plane; once engaged it HOLDS as long as the death plane
 +        // is still the floor - the warp fires above the plane but Mario can physically touch down on it
 +        // before the fade finishes, and the look-up should ride through that landing, not tip back down
@@ -1380,7 +1392,7 @@ index 4bfed22b7..7d2c9c2b3 100644
 +        bool overDeathPlane = m->floor != NULL && m->floor->type == SURFACE_DEATH_PLANE;
 +        bool fallingOut = overDeathPlane
 +                       && (((m->action & ACT_FLAG_AIR) && m->vel[1] < 0.0f) || sFallOutRamp > 0.0f);
-+        sFallOutRamp += (fallingOut ? 1.0f : -2.0f) * (f32)elapsed / 45.0f; // ~1.5s up, faster back out
++        sFallOutRamp += (fallingOut ? 1.0f : -2.0f) * (f32)frameDelta / 45.0f; // ~1.5s up, faster back out
 +        if (sFallOutRamp < 0.0f) { sFallOutRamp = 0.0f; }
 +        if (sFallOutRamp > 1.0f) { sFallOutRamp = 1.0f; }
 +    }
@@ -1459,32 +1471,30 @@ index 4bfed22b7..7d2c9c2b3 100644
 +    }
 +
 +    s16 actionAngle = 0;
++    f32 strikeTarget = 0.0f; // melee lean target; smoothed across game frames below, never applied raw
 +    struct AnimInfo *a = &m->marioObj->header.gfx.animInfo;
 +    if (flips && a->curAnim != NULL && a->curAnim->loopEnd > 1) {
 +        f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
 +        if (progress < 0.0f) { progress = 0.0f; }
 +        if (progress > 1.0f) { progress = 1.0f; }
 +
-+        if (tipPeak != 0) {
++        if (tipPeak != 0 && strike) {
++            // Strike envelope: smoothstep up to the peak about a third into the swing, smoothstep
++            // back down through the follow-through. Feeds the low-pass below, not the view directly.
 +            f32 tip;
-+            if (strike) {
-+                // Strike envelope: smoothstep up to the peak about a third into the swing, smoothstep
-+                // back down through the follow-through. (An earlier curve - half sine over the square
-+                // root of progress - reached a third of its peak within the first frame; that step read
-+                // as a jolt rather than a lean, especially in a headset.)
-+                if (progress < 0.32f) {
-+                    f32 t = progress / 0.32f;
-+                    tip = t * t * (3.0f - 2.0f * t);
-+                } else {
-+                    f32 t = (progress - 0.32f) / 0.68f;
-+                    tip = 1.0f - t * t * (3.0f - 2.0f * t);
-+                }
++            if (progress < 0.32f) {
++                f32 t = progress / 0.32f;
++                tip = t * t * (3.0f - 2.0f * t);
 +            } else {
-+                // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
-+                // so a hit or a lunge moves the view without ever flipping the world - and an animation that
-+                // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
-+                tip = sins((s16)(progress * 32768.0f));
++                f32 t = (progress - 0.32f) / 0.68f;
++                tip = 1.0f - t * t * (3.0f - 2.0f * t);
 +            }
++            strikeTarget = tip * dir * (f32)tipPeak;
++        } else if (tipPeak != 0) {
++            // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
++            // so a hit or a lunge moves the view without ever flipping the world - and an animation that
++            // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
++            f32 tip = sins((s16)(progress * 32768.0f));
 +            actionAngle = (s16)(tip * dir * (f32)tipPeak);
 +        } else if (holdPeak != 0) {
 +            // Death tip: eases over with the animation and STAYS there (the death anims hold their last
@@ -1502,6 +1512,17 @@ index 4bfed22b7..7d2c9c2b3 100644
 +            actionAngle = (s16)(eased * dir * 65536.0f);
 +        }
 +    }
++
++    // Melee lean smoothing: the punch combo swaps animations per hit, which restarts the envelope and
++    // used to STEP the lean partway back to zero between hits - mashing B read as the view rocking.
++    // A short low-pass (advanced by game frames) carries the lean across the swaps, so a combo reads
++    // as one continuous, subtle lean that eases away after the last hit.
++    static f32 sStrikeLean = 0.0f;
++    for (u32 i = 0; i < frameDelta; i++) {
++        sStrikeLean += (strikeTarget - sStrikeLean) * 0.25f;
++    }
++    if (strikeTarget == 0.0f && sStrikeLean > -16.0f && sStrikeLean < 16.0f) { sStrikeLean = 0.0f; }
++    actionAngle = (s16)((f32)actionAngle + sStrikeLean);
 +
 +    // Blend toward the fall-out-of-level look-up; it wins over whatever action carried you off the edge.
 +    if (sFallOutRamp > 0.001f) {
@@ -1531,7 +1552,7 @@ index 4bfed22b7..7d2c9c2b3 100644
 +    return m->action == ACT_PUNCHING && m->actionArg == 9; // crouch sweep kick: a low roll with the legs
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf8f..26449e5f7 100644
+index 42bfeaf8f..8f738ece0 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
 @@ -7,6 +7,36 @@
@@ -1551,10 +1572,10 @@ index 42bfeaf8f..26449e5f7 100644
 +// Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
 +// head-first lunge and settles by the time the slide starts.
 +#define FIRST_PERSON_DIVE_PITCH 0x1800
-+// Peak melee lean (~13 deg). Punches lean the view in with the hit and the kicks lean back behind the
-+// extended leg, easing out through the follow-through; the punch combo swaps animations per hit, so each
-+// hit gets its own lean. Kept modest - melee fires constantly, so a big tilt reads as jarring fast.
-+#define FIRST_PERSON_MELEE_PITCH 0x0900
++// Peak melee lean (~7 deg). Punches lean the view in with the hit and the kicks lean back behind the
++// extended leg; the lean is low-passed across the combo so mashing reads as one continuous subtle lean,
++// not a rock. Kept SMALL on purpose - melee fires constantly, and anything bigger reads as jarring fast.
++#define FIRST_PERSON_MELEE_PITCH 0x0500
 +// Peak death tip (~56 deg). Dying eases the view over with the death animation and HOLDS it there -
 +// backward for the classic standing death, forward for dying on the stomach - until the death warp.
 +#define FIRST_PERSON_DEATH_PITCH 0x2800
@@ -2217,10 +2238,10 @@ index 29f48eaba..a266b8fb4 100644
          controller_mouse_leave_relative();
 diff --git a/src/pc/controller/controller_vr.c b/src/pc/controller/controller_vr.c
 new file mode 100644
-index 000000000..2e9b89a26
+index 000000000..6e6b15efb
 --- /dev/null
 +++ b/src/pc/controller/controller_vr.c
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,268 @@
 +// VR motion controllers (Quest Touch, Index, WMR, Vive) as a game controller.
 +//
 +// vr.c polls the OpenXR action state once per frame; this backend feeds it into the game.
@@ -2231,8 +2252,8 @@ index 000000000..2e9b89a26
 +// controllers in ways that look like wrong-hand bugs. The pad is what gameplay and the DJUI
 +// menus read, so everything below works the same for every config:
 +//
-+//   left stick    move                 right stick   camera (C buttons; analog look is scaled
-+//                                                    down, see VR_CAM_STICK_SCALE)
++//   left stick    move                 right stick   camera (C buttons; analog look runs a response
++//                                                    curve, see VR_CAM_STICK_CENTER_RESPONSE)
 +//   A             jump (A)             B             punch (B)
 +//   left trigger  crouch (Z)           right trigger R (and next page in menus)
 +//   either grip   grab / throw (B, only while something grabbable is in reach - never punches air)
@@ -2272,10 +2293,14 @@ index 000000000..2e9b89a26
 +
 +#define MAX_VRBUTTONS 32 // virtual button indices, including the trigger virtual keys (0x1A/0x1B)
 +
-+// How much of the camera stick's deflection reaches the analog look (free cam, first person).
-+// 1.0 was too fast in the headset. Only the analog path is scaled; the C-button thresholds
-+// still trip at the same physical deflection.
-+#define VR_CAM_STICK_SCALE 0.55f
++// Camera stick response curve (the analog look: free cam, first person). Near the center the
++// response is eased down for fine, comfortable aiming; it ramps up smoothly with deflection and
++// reaches FULL speed at the edge. The old flat 0.55x scale was the worst of both - fine aim
++// still moved at over half speed, and the top turn speed was capped at barely half of what the
++// stick can ask for, which read as a limited range. Only the analog path is shaped; the
++// C-button thresholds still trip at the same physical deflection.
++// response = CENTER + (1 - CENTER) * deflection, applied radially so diagonals feel the same.
++#define VR_CAM_STICK_CENTER_RESPONSE 0.30f
 +
 +// Virtual key indices in the SDL gamepad keyspace (SDL_GameControllerButton values), used for
 +// the DJUI key events and bind capture only - the gameplay mapping is the pad table below.
@@ -2444,8 +2469,13 @@ index 000000000..2e9b89a26
 +    s8 camx = 0, camy = 0;
 +    vr_update_analog_stick(&camx, &camy, rightx, righty);
 +    if (camx || camy) {
-+        pad->ext_stick_x = (s8)(camx * VR_CAM_STICK_SCALE);
-+        pad->ext_stick_y = (s8)(camy * VR_CAM_STICK_SCALE);
++        f32 nx = (f32)camx / 127.0f;
++        f32 ny = (f32)camy / 127.0f;
++        f32 mag = sqrtf(nx * nx + ny * ny);
++        if (mag > 1.0f) { mag = 1.0f; }
++        f32 response = VR_CAM_STICK_CENTER_RESPONSE + (1.0f - VR_CAM_STICK_CENTER_RESPONSE) * mag;
++        pad->ext_stick_x = (s8)(camx * response);
++        pad->ext_stick_y = (s8)(camy * response);
 +    }
 +}
 +
