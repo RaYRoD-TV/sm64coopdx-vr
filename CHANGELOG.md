@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+First person
+- Talking to characters no longer freezes the game in first person. Toads,
+  Bob-omb buddies, Koopa the Quick, cap switches and the other cutscene-driven
+  conversations used to leave Mario stuck in place with no dialog box, because
+  the camera system that creates those dialogs was asleep while first person
+  held the camera. The dialog flow now runs in first person (VR and flatscreen)
+  without moving your view: the text box appears, your answer registers, and
+  the ease-back pulls back to show Mario talking. One conversation hanging also
+  used to quietly break every later interaction in the level until you switched
+  view modes - that leak is gone too, and signs now hold Mario in place while
+  the text is up, like they do in third person.
+- Slides ride at body height: belly and butt slides, slide kicks and the slide
+  after a long jump drop the eye toward the ground the same smooth way crawling
+  already does, instead of leaving the view at standing height while Mario
+  scrapes along below. Getting knocked flat drops it too, and getting up brings
+  it back.
+- FP Flip Cam now covers falling, getting hurt and the jump slides. Knockbacks
+  tip the view the way the hit threw Mario - backward hits look up as you land
+  on your back, forward hits look down - and settle back to level. The dive
+  (and, gentler, the long jump) leans into the head-first lunge. Like the flip
+  jumps, these only move the view when the FP Flip Cam toggle is on.
+
 ## v0.5 - 2026-06-10
 
 VR controllers

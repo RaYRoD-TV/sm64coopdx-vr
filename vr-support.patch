@@ -29,11 +29,35 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..0fa6a5fc6
+index 000000000..4415fab46
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,162 @@
 +# Changelog
++
++## Unreleased
++
++First person
++- Talking to characters no longer freezes the game in first person. Toads,
++  Bob-omb buddies, Koopa the Quick, cap switches and the other cutscene-driven
++  conversations used to leave Mario stuck in place with no dialog box, because
++  the camera system that creates those dialogs was asleep while first person
++  held the camera. The dialog flow now runs in first person (VR and flatscreen)
++  without moving your view: the text box appears, your answer registers, and
++  the ease-back pulls back to show Mario talking. One conversation hanging also
++  used to quietly break every later interaction in the level until you switched
++  view modes - that leak is gone too, and signs now hold Mario in place while
++  the text is up, like they do in third person.
++- Slides ride at body height: belly and butt slides, slide kicks and the slide
++  after a long jump drop the eye toward the ground the same smooth way crawling
++  already does, instead of leaving the view at standing height while Mario
++  scrapes along below. Getting knocked flat drops it too, and getting up brings
++  it back.
++- FP Flip Cam now covers falling, getting hurt and the jump slides. Knockbacks
++  tip the view the way the hit threw Mario - backward hits look up as you land
++  on your back, forward hits look down - and settle back to level. The dive
++  (and, gentler, the long jump) leans into the head-first lunge. Like the flip
++  jumps, these only move the view when the FP Flip Cam toggle is on.
 +
 +## v0.5 - 2026-06-10
 +
@@ -744,7 +768,7 @@ index 76651f134..115094c62 100644
  
  static void newcam_apply_values(struct Camera *c) {
 diff --git a/src/game/camera.c b/src/game/camera.c
-index 5406e94eb..ad47d669d 100644
+index 5406e94eb..ea0c75e5c 100644
 --- a/src/game/camera.c
 +++ b/src/game/camera.c
 @@ -34,6 +34,7 @@
@@ -755,7 +779,95 @@ index 5406e94eb..ad47d669d 100644
  #include "pc/lua/smlua_hooks.h"
  #include "pc/djui/djui.h"
  #include "first_person_cam.h"
-@@ -3189,6 +3190,22 @@ void update_camera(struct Camera *c) {
+@@ -3178,6 +3179,87 @@ static u8 update_romhack_camera_override(struct Camera *c) {
+     return TRUE;
+ }
+ 
++/**
++ * First person owns the camera pose (update_camera returns early below), which used to leave the
++ * object-cutscene machinery dead while it was active. NPC dialogs (Toads, Bob-omb buddies, Koopa
++ * the Quick races...), sign messages and cap switches arm sObjectCutscene and then poll
++ * cutscene_object_with_dialog() every frame until the camera plays their cutscene and hands back
++ * the player's response. With nothing consuming the armed cutscene, the dialog box never appeared
++ * and Mario sat frozen in ACT_READING_NPC_DIALOG forever - in first person (VR or flatscreen)
++ * every cutscene-driven interaction hung, and the armed cutscene leaked into every later
++ * interaction (and could fire a stale sign cutscene after switching view modes).
++ *
++ * These are the cutscenes whose STATE FLOW matters to gameplay (dialog box, response, cap switch
++ * save, time stop). They run for real in first person, with the camera pose pinned.
++ */
++static bool first_person_cutscene_runs(u8 cutscene) {
++    switch (cutscene) {
++        case CUTSCENE_DIALOG:
++        case CUTSCENE_RACE_DIALOG:
++        case CUTSCENE_READ_MESSAGE:
++        case CUTSCENE_CAP_SWITCH_PRESS:
++            return true;
++    }
++    return false;
++}
++
++/**
++ * Keep the cutscene system alive while first person owns the camera. Dialog-style cutscenes run
++ * through the normal play_cutscene flow - creating the dialog box, capturing the response, saving
++ * cap switches, clearing time stop, marking the cutscene recently-played - but the camera/Lakitu
++ * pose is snapshotted and restored around the call, so the view stays where the player's head put
++ * it (the FP ease-back already pulls back to show Mario talking). Camera-flourish-only cutscenes
++ * (star-spawn pans, the prepare-cannon flyby...) are reported as already played so behaviors
++ * waiting on them advance immediately; flying the view around the level is exactly what first
++ * person shouldn't do. Switching view modes mid-dialog hands off cleanly in both directions
++ * because the real cutscene state (c->cutscene, gCutsceneTimer, sCutsceneShot) stays in sync.
++ */
++static void first_person_pump_cutscenes(struct Camera *c) {
++    // Consume cutscenes armed by objects (get_cutscene_from_mario_status normally does this).
++    if (c->cutscene == 0 && sObjectCutscene != 0) {
++        u8 pending = sObjectCutscene;
++        sObjectCutscene = 0;
++        if (first_person_cutscene_runs(pending)) {
++            start_cutscene(c, pending);
++        } else {
++            gRecentCutscene = pending;
++            sFramesSinceCutsceneEnded = 0;
++        }
++    }
++    // One-shot camera events (doors, door warps) are camera presentation we skip in first person;
++    // eat them so a stale event can't fire its cutscene later when the player switches view mode.
++    sMarioCamState->cameraEvent = 0;
++
++    if (c->cutscene != 0) {
++        // Run the real cutscene logic with the pose pinned: snapshot the camera and Lakitu, play,
++        // then put the pose back while keeping every state change the cutscene made.
++        struct LakituState savedLakitu = gLakituState;
++        Vec3f savedPos, savedFocus;
++        vec3f_copy(savedPos, c->pos);
++        vec3f_copy(savedFocus, c->focus);
++        s16 savedYaw = c->yaw;
++        s16 savedNextYaw = c->nextYaw;
++
++        sYawSpeed = 0;
++        play_cutscene(c);
++        sFramesSinceCutsceneEnded = 0;
++
++        gLakituState = savedLakitu;
++        vec3f_copy(c->pos, savedPos);
++        vec3f_copy(c->focus, savedFocus);
++        c->yaw = savedYaw;
++        c->nextYaw = savedNextYaw;
++    } else if (gRecentCutscene != 0 && sFramesSinceCutsceneEnded < 8) {
++        // Mirror update_camera's recently-played expiry so a finished dialog's response can't
++        // replay into the next interaction of the same type.
++        sFramesSinceCutsceneEnded++;
++        if (sFramesSinceCutsceneEnded >= 8) {
++            gRecentCutscene = 0;
++            sFramesSinceCutsceneEnded = 0;
++        }
++    }
++}
++
+ /**
+  * The main camera update function.
+  * Gets controller input, checks for cutscenes, handles mode changes, and moves the camera
+@@ -3189,7 +3271,29 @@ void update_camera(struct Camera *c) {
      gCamera = c;
      update_camera_hud_status(c);
  
@@ -776,9 +888,16 @@ index 5406e94eb..ad47d669d 100644
 +    }
 +
      if ((gOverrideFreezeCamera || get_first_person_enabled()) && !gDjuiInMainMenu) {
++        // First person never moves the camera here, but interactions still need the cutscene
++        // machinery (see first_person_pump_cutscenes). gOverrideFreezeCamera (a Lua mod freeze)
++        // keeps its full-freeze semantics and skips the pump.
++        if (!gOverrideFreezeCamera) {
++            first_person_pump_cutscenes(c);
++        }
          return;
      }
-@@ -3207,7 +3224,13 @@ void update_camera(struct Camera *c) {
+ 
+@@ -3207,7 +3311,13 @@ void update_camera(struct Camera *c) {
      if (c->cutscene == 0) {
          // Only process R_TRIG if 'fixed' is not selected in the menu
          if (cam_select_alt_mode(0) == CAM_SELECTION_MARIO && c->mode != CAMERA_MODE_NEWCAM) {
@@ -793,7 +912,7 @@ index 5406e94eb..ad47d669d 100644
                  bool allowSetCamAngle = true;
                  if (set_cam_angle(0) == CAM_ANGLE_LAKITU) {
                      smlua_call_event_hooks(HOOK_ON_CHANGE_CAMERA_ANGLE, CAM_ANGLE_MARIO, &allowSetCamAngle);
-@@ -3724,7 +3747,13 @@ void zoom_out_if_paused_and_outside(struct GraphNodeCamera *camera) {
+@@ -3724,7 +3834,13 @@ void zoom_out_if_paused_and_outside(struct GraphNodeCamera *camera) {
          areaMaskIndex = 0;
          areaBit = 0;
      }
@@ -808,7 +927,7 @@ index 5406e94eb..ad47d669d 100644
          if (sFramesPaused >= 2) {
              if (sZoomOutAreaMasks[areaMaskIndex] & areaBit) {
  
-@@ -9557,9 +9586,15 @@ BAD_RETURN(s32) cutscene_read_message_start(struct Camera *c) {
+@@ -9557,9 +9673,15 @@ BAD_RETURN(s32) cutscene_read_message_start(struct Camera *c) {
  
      sCutsceneVars[1].angle[0] = sCUpCameraPitch;
      sCutsceneVars[1].angle[1] = sModeOffsetYaw;
@@ -825,7 +944,7 @@ index 5406e94eb..ad47d669d 100644
  }
  
  UNUSED static void unused_cam_to_mario(struct Camera *c) {
-@@ -9586,13 +9621,33 @@ BAD_RETURN(s32) cutscene_read_message(struct Camera *c) {
+@@ -9586,13 +9708,33 @@ BAD_RETURN(s32) cutscene_read_message(struct Camera *c) {
          case 0:
              if (get_dialog_id() != DIALOG_NONE) {
                  sCutsceneVars[0].angle[0] += 1;
@@ -862,7 +981,7 @@ index 5406e94eb..ad47d669d 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22b7..7080b8ef5 100644
+index 4bfed22b7..9f8bdf868 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
 @@ -9,12 +9,14 @@
@@ -905,7 +1024,7 @@ index 4bfed22b7..7080b8ef5 100644
          return true;
      }
      if (find_object_with_behavior(smlua_override_behavior(bhvActSelector)) != NULL) { return true; }
-@@ -57,12 +68,41 @@ bool get_first_person_enabled(void) {
+@@ -57,12 +68,59 @@ bool get_first_person_enabled(void) {
  
  void set_first_person_enabled(bool enable) {
      gFirstPersonCamera.enabled = enable;
@@ -932,6 +1051,24 @@ index 4bfed22b7..7080b8ef5 100644
 +        m->input &= ~INPUT_FIRST_PERSON;
 +        set_mario_action(m, ACT_IDLE, 0);
 +    }
++}
++
++// Prone body states: slides along the ground (butt/stomach/dive slides, slide kicks, the slide after a
++// long jump) and being knocked flat by a hit or a fall. The eye drops toward the floor the same smooth
++// way crouching/crawling already does (see the body-height block in first_person_camera_update).
++static bool first_person_body_is_prone(struct MarioState *m) {
++    switch (m->action) {
++        case ACT_SLIDE_KICK_SLIDE:
++        case ACT_DIVE_SLIDE:
++        case ACT_LONG_JUMP_LAND:
++        case ACT_BACKWARD_GROUND_KB:
++        case ACT_FORWARD_GROUND_KB:
++        case ACT_HARD_BACKWARD_GROUND_KB:
++        case ACT_HARD_FORWARD_GROUND_KB:
++        case ACT_GROUND_BONK:
++            return true;
++    }
++    return (m->action & ACT_FLAG_BUTT_OR_STOMACH_SLIDE) != 0;
  }
  
  static void first_person_camera_update(void) {
@@ -947,7 +1084,7 @@ index 4bfed22b7..7080b8ef5 100644
  
      if (mouse_relative_enabled) {
          // hack: make c buttons work for moving the camera
-@@ -77,7 +117,7 @@ static void first_person_camera_update(void) {
+@@ -77,7 +135,7 @@ static void first_person_camera_update(void) {
  
          // update pitch
          if (!gFirstPersonCamera.forcePitch) {
@@ -956,7 +1093,7 @@ index 4bfed22b7..7080b8ef5 100644
              gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
          }
  
-@@ -86,7 +126,7 @@ static void first_person_camera_update(void) {
+@@ -86,7 +144,7 @@ static void first_person_camera_update(void) {
              if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
                  gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
              } else {
@@ -965,7 +1102,7 @@ index 4bfed22b7..7080b8ef5 100644
              }
          }
      }
-@@ -106,9 +146,13 @@ static void first_person_camera_update(void) {
+@@ -106,46 +164,107 @@ static void first_person_camera_update(void) {
              break;
          }
      }
@@ -980,7 +1117,34 @@ index 4bfed22b7..7080b8ef5 100644
  
      gLakituState.yaw = gFirstPersonCamera.yaw;
      m->area->camera->yaw = gFirstPersonCamera.yaw;
-@@ -126,26 +170,73 @@ static void first_person_camera_update(void) {
+ 
+-    // update crouch
+-    if (mario_is_crouching(m) || m->action == ACT_LEDGE_GRAB) {
+-        bool up = (m->controller->buttonDown & Z_TRIG) != 0 || m->action == ACT_CROUCH_SLIDE || m->action == ACT_LEDGE_GRAB;
+-        f32 inc = 10 * (up ? 1 : -1);
+-        gFirstPersonCamera.crouch = clamp(gFirstPersonCamera.crouch + inc, 0, FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT);
+-    } else {
+-        gFirstPersonCamera.crouch = clamp(gFirstPersonCamera.crouch - 10, 0, FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT);
++    // update body height. Crouching/crawling drop the eye to the SHORT head height like before (Z held
++    // keeps it down); PRONE bodies - ground slides like the one after a long jump, and being knocked
++    // flat - drop further, so riding a slide or getting floored reads at body height, the way crawling
++    // already does, instead of floating at standing height while the body scrapes along below.
++    {
++        bool prone = first_person_body_is_prone(m);
++        f32 targetDrop = 0.0f;
++        f32 rate = 10.0f;
++        if (prone) {
++            targetDrop = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_PRONE;
++            rate = 16.0f; // dives and slides hit the ground fast - catch up quicker than a crouch
++        } else if (mario_is_crouching(m) || m->action == ACT_LEDGE_GRAB) {
++            bool down = (m->controller->buttonDown & Z_TRIG) != 0 || m->action == ACT_CROUCH_SLIDE || m->action == ACT_LEDGE_GRAB;
++            if (down) { targetDrop = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT; }
++        }
++        f32 d = targetDrop - gFirstPersonCamera.crouch;
++        gFirstPersonCamera.crouch += clamp(d, -rate, rate);
+     }
+ 
+     if (m->action == ACT_LEDGE_GRAB) {
          gFirstPersonCamera.crouch = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT;
      }
  
@@ -1067,7 +1231,7 @@ index 4bfed22b7..7080b8ef5 100644
      gLakituState.posHSpeed = 0;
      gLakituState.posVSpeed = 0;
      gLakituState.focHSpeed = 0;
-@@ -174,7 +265,15 @@ void first_person_update(void) {
+@@ -174,7 +293,15 @@ void first_person_update(void) {
              level_trigger_warp(m, WARP_OP_LOOK_UP);
          }
  
@@ -1084,7 +1248,7 @@ index 4bfed22b7..7080b8ef5 100644
          if (m->heldObj) {
              Vec3f camDir = {
                  m->area->camera->focus[0] - m->area->camera->pos[0],
-@@ -193,6 +292,9 @@ void first_person_update(void) {
+@@ -193,6 +320,9 @@ void first_person_update(void) {
  void first_person_reset(void) {
      gFirstPersonCamera.forceRoll = false;
      gFirstPersonCamera.centerL = true;
@@ -1094,7 +1258,7 @@ index 4bfed22b7..7080b8ef5 100644
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +303,90 @@ void first_person_reset(void) {
+@@ -201,3 +331,123 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -1140,6 +1304,7 @@ index 4bfed22b7..7080b8ef5 100644
 +    sPrevAction = m->action;
 +
 +    f32 dir;
++    s16 tipPeak = 0; // nonzero = PARTIAL pitch tip (hurt / dive), not a full somersault turn
 +    switch (m->action) {
 +        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward (pitch)
 +        case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward, star/cap triple jump (pitch)
@@ -1153,6 +1318,30 @@ index 4bfed22b7..7080b8ef5 100644
 +        case ACT_WALL_KICK_AIR:
 +            if (!sWallKickFromPole) { return 0; }         // ordinary wall kicks don't flip
 +            dir = -1.0f; break;                            // kicking off a tree -> back (pitch)
++        // Falling and getting hurt: knockbacks TIP the view the way the hit threw Mario - backward hits
++        // look up as you go down on your back, forward hits look down - then settle level. The ground
++        // knockdowns pair with the prone eye drop (body height block) so being floored reads as lying
++        // on the floor, and getting up brings both back together.
++        case ACT_BACKWARD_AIR_KB:
++        case ACT_HARD_BACKWARD_AIR_KB:
++        case ACT_THROWN_BACKWARD:
++        case ACT_BACKWARD_GROUND_KB:
++        case ACT_HARD_BACKWARD_GROUND_KB:
++            dir = -1.0f; tipPeak = FIRST_PERSON_HURT_PITCH; break;
++        case ACT_FORWARD_AIR_KB:
++        case ACT_HARD_FORWARD_AIR_KB:
++        case ACT_THROWN_FORWARD:
++        case ACT_FORWARD_GROUND_KB:
++        case ACT_HARD_FORWARD_GROUND_KB:
++        case ACT_GROUND_BONK:
++            dir =  1.0f; tipPeak = FIRST_PERSON_HURT_PITCH; break;
++        case ACT_SOFT_BONK:
++            dir = -1.0f; tipPeak = FIRST_PERSON_HURT_PITCH / 2; break; // bumping a wall: a smaller jolt
++        // Jump-slides: the dive (and, gentler, the long jump) lunges head-first. Lean the view into the
++        // lunge and settle by the time the slide starts - the slide itself rides low through the prone
++        // eye height, the same way a crawl does.
++        case ACT_DIVE:                dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH; break;
++        case ACT_LONG_JUMP:           dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH / 2; break;
 +        default:                      return 0;
 +    }
 +
@@ -1161,6 +1350,14 @@ index 4bfed22b7..7080b8ef5 100644
 +    f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
 +    if (progress < 0.0f) { progress = 0.0f; }
 +    if (progress > 1.0f) { progress = 1.0f; }
++
++    if (tipPeak != 0) {
++        // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
++        // so a hit or a lunge moves the view without ever flipping the world - and an animation that
++        // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
++        f32 tip = sins((s16)(progress * 32768.0f));
++        return (s16)(tip * dir * (f32)tipPeak);
++    }
 +
 +    if (m->action == ACT_SIDE_FLIP) {
 +        // A gentle lean toward the flip side that rises and settles back to level (half sine, 0 -> 1 -> 0),
@@ -1186,20 +1383,30 @@ index 4bfed22b7..7080b8ef5 100644
 +    return gFirstPersonCamera.flipCam && gFirstPersonCamera.enabled && m != NULL && m->action == ACT_SIDE_FLIP;
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf8f..47ab0ce14 100644
+index 42bfeaf8f..13f7ed31a 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
-@@ -8,12 +8,19 @@
+@@ -7,6 +7,19 @@
+ 
  #define FIRST_PERSON_MARIO_HEAD_POS 120
  #define FIRST_PERSON_MARIO_HEAD_POS_SHORT 60
- 
++// Eye height while the body is PRONE on the ground (belly/butt slides, long-jump slides, knocked flat).
++// Lower than the crouch/crawl height: the head is basically at floor level when sliding on the stomach.
++#define FIRST_PERSON_MARIO_HEAD_POS_PRONE 36
++
 +// Peak side-flip lean (s16 angle units; 0x2000 ~ 45 deg). A side flip tips the view this far toward the
 +// side it flips and settles back to level, so it reads as a side flip without a disorienting barrel roll.
 +#define FIRST_PERSON_SIDE_FLIP_LEAN 0x2000
-+
++// Peak hurt tip (s16 angle units; ~45 deg). Knockbacks tip the view the way the hit threw Mario - back
++// hits look up as you land on your back, forward hits look down - and settle back to level.
++#define FIRST_PERSON_HURT_PITCH 0x2000
++// Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
++// head-first lunge and settles by the time the slide starts.
++#define FIRST_PERSON_DIVE_PITCH 0x1800
+ 
  struct FirstPersonCamera {
      bool enabled;
-     bool forcePitch;
+@@ -14,6 +27,9 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
@@ -1209,7 +1416,7 @@ index 42bfeaf8f..47ab0ce14 100644
      s16 pitch;
      s16 yaw;
      f32 crouch;
-@@ -35,4 +42,18 @@ void first_person_update(void);
+@@ -35,4 +51,18 @@ void first_person_update(void);
  /* |description|Resets first person|descriptionEnd| */
  void first_person_reset(void);
  

@@ -93,6 +93,24 @@ void first_person_exit_lookaround_for_tabletop(void) {
     }
 }
 
+// Prone body states: slides along the ground (butt/stomach/dive slides, slide kicks, the slide after a
+// long jump) and being knocked flat by a hit or a fall. The eye drops toward the floor the same smooth
+// way crouching/crawling already does (see the body-height block in first_person_camera_update).
+static bool first_person_body_is_prone(struct MarioState *m) {
+    switch (m->action) {
+        case ACT_SLIDE_KICK_SLIDE:
+        case ACT_DIVE_SLIDE:
+        case ACT_LONG_JUMP_LAND:
+        case ACT_BACKWARD_GROUND_KB:
+        case ACT_FORWARD_GROUND_KB:
+        case ACT_HARD_BACKWARD_GROUND_KB:
+        case ACT_HARD_FORWARD_GROUND_KB:
+        case ACT_GROUND_BONK:
+            return true;
+    }
+    return (m->action & ACT_FLAG_BUTT_OR_STOMACH_SLIDE) != 0;
+}
+
 static void first_person_camera_update(void) {
     struct MarioState *m = &gMarioStates[0];
     f32 sensX = 0.3f * camera_config_get_x_sensitivity();
@@ -157,13 +175,23 @@ static void first_person_camera_update(void) {
     gLakituState.yaw = gFirstPersonCamera.yaw;
     m->area->camera->yaw = gFirstPersonCamera.yaw;
 
-    // update crouch
-    if (mario_is_crouching(m) || m->action == ACT_LEDGE_GRAB) {
-        bool up = (m->controller->buttonDown & Z_TRIG) != 0 || m->action == ACT_CROUCH_SLIDE || m->action == ACT_LEDGE_GRAB;
-        f32 inc = 10 * (up ? 1 : -1);
-        gFirstPersonCamera.crouch = clamp(gFirstPersonCamera.crouch + inc, 0, FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT);
-    } else {
-        gFirstPersonCamera.crouch = clamp(gFirstPersonCamera.crouch - 10, 0, FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT);
+    // update body height. Crouching/crawling drop the eye to the SHORT head height like before (Z held
+    // keeps it down); PRONE bodies - ground slides like the one after a long jump, and being knocked
+    // flat - drop further, so riding a slide or getting floored reads at body height, the way crawling
+    // already does, instead of floating at standing height while the body scrapes along below.
+    {
+        bool prone = first_person_body_is_prone(m);
+        f32 targetDrop = 0.0f;
+        f32 rate = 10.0f;
+        if (prone) {
+            targetDrop = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_PRONE;
+            rate = 16.0f; // dives and slides hit the ground fast - catch up quicker than a crouch
+        } else if (mario_is_crouching(m) || m->action == ACT_LEDGE_GRAB) {
+            bool down = (m->controller->buttonDown & Z_TRIG) != 0 || m->action == ACT_CROUCH_SLIDE || m->action == ACT_LEDGE_GRAB;
+            if (down) { targetDrop = FIRST_PERSON_MARIO_HEAD_POS - FIRST_PERSON_MARIO_HEAD_POS_SHORT; }
+        }
+        f32 d = targetDrop - gFirstPersonCamera.crouch;
+        gFirstPersonCamera.crouch += clamp(d, -rate, rate);
     }
 
     if (m->action == ACT_LEDGE_GRAB) {
@@ -345,6 +373,7 @@ s16 first_person_flip_roll(struct MarioState *m) {
     sPrevAction = m->action;
 
     f32 dir;
+    s16 tipPeak = 0; // nonzero = PARTIAL pitch tip (hurt / dive), not a full somersault turn
     switch (m->action) {
         case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward (pitch)
         case ACT_SPECIAL_TRIPLE_JUMP: dir =  1.0f; break; // forward, star/cap triple jump (pitch)
@@ -358,6 +387,30 @@ s16 first_person_flip_roll(struct MarioState *m) {
         case ACT_WALL_KICK_AIR:
             if (!sWallKickFromPole) { return 0; }         // ordinary wall kicks don't flip
             dir = -1.0f; break;                            // kicking off a tree -> back (pitch)
+        // Falling and getting hurt: knockbacks TIP the view the way the hit threw Mario - backward hits
+        // look up as you go down on your back, forward hits look down - then settle level. The ground
+        // knockdowns pair with the prone eye drop (body height block) so being floored reads as lying
+        // on the floor, and getting up brings both back together.
+        case ACT_BACKWARD_AIR_KB:
+        case ACT_HARD_BACKWARD_AIR_KB:
+        case ACT_THROWN_BACKWARD:
+        case ACT_BACKWARD_GROUND_KB:
+        case ACT_HARD_BACKWARD_GROUND_KB:
+            dir = -1.0f; tipPeak = FIRST_PERSON_HURT_PITCH; break;
+        case ACT_FORWARD_AIR_KB:
+        case ACT_HARD_FORWARD_AIR_KB:
+        case ACT_THROWN_FORWARD:
+        case ACT_FORWARD_GROUND_KB:
+        case ACT_HARD_FORWARD_GROUND_KB:
+        case ACT_GROUND_BONK:
+            dir =  1.0f; tipPeak = FIRST_PERSON_HURT_PITCH; break;
+        case ACT_SOFT_BONK:
+            dir = -1.0f; tipPeak = FIRST_PERSON_HURT_PITCH / 2; break; // bumping a wall: a smaller jolt
+        // Jump-slides: the dive (and, gentler, the long jump) lunges head-first. Lean the view into the
+        // lunge and settle by the time the slide starts - the slide itself rides low through the prone
+        // eye height, the same way a crawl does.
+        case ACT_DIVE:                dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH; break;
+        case ACT_LONG_JUMP:           dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH / 2; break;
         default:                      return 0;
     }
 
@@ -366,6 +419,14 @@ s16 first_person_flip_roll(struct MarioState *m) {
     f32 progress = (f32)a->animFrame / (f32)(a->curAnim->loopEnd - 1);
     if (progress < 0.0f) { progress = 0.0f; }
     if (progress > 1.0f) { progress = 1.0f; }
+
+    if (tipPeak != 0) {
+        // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
+        // so a hit or a lunge moves the view without ever flipping the world - and an animation that
+        // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
+        f32 tip = sins((s16)(progress * 32768.0f));
+        return (s16)(tip * dir * (f32)tipPeak);
+    }
 
     if (m->action == ACT_SIDE_FLIP) {
         // A gentle lean toward the flip side that rises and settles back to level (half sine, 0 -> 1 -> 0),

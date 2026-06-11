@@ -3180,6 +3180,87 @@ static u8 update_romhack_camera_override(struct Camera *c) {
 }
 
 /**
+ * First person owns the camera pose (update_camera returns early below), which used to leave the
+ * object-cutscene machinery dead while it was active. NPC dialogs (Toads, Bob-omb buddies, Koopa
+ * the Quick races...), sign messages and cap switches arm sObjectCutscene and then poll
+ * cutscene_object_with_dialog() every frame until the camera plays their cutscene and hands back
+ * the player's response. With nothing consuming the armed cutscene, the dialog box never appeared
+ * and Mario sat frozen in ACT_READING_NPC_DIALOG forever - in first person (VR or flatscreen)
+ * every cutscene-driven interaction hung, and the armed cutscene leaked into every later
+ * interaction (and could fire a stale sign cutscene after switching view modes).
+ *
+ * These are the cutscenes whose STATE FLOW matters to gameplay (dialog box, response, cap switch
+ * save, time stop). They run for real in first person, with the camera pose pinned.
+ */
+static bool first_person_cutscene_runs(u8 cutscene) {
+    switch (cutscene) {
+        case CUTSCENE_DIALOG:
+        case CUTSCENE_RACE_DIALOG:
+        case CUTSCENE_READ_MESSAGE:
+        case CUTSCENE_CAP_SWITCH_PRESS:
+            return true;
+    }
+    return false;
+}
+
+/**
+ * Keep the cutscene system alive while first person owns the camera. Dialog-style cutscenes run
+ * through the normal play_cutscene flow - creating the dialog box, capturing the response, saving
+ * cap switches, clearing time stop, marking the cutscene recently-played - but the camera/Lakitu
+ * pose is snapshotted and restored around the call, so the view stays where the player's head put
+ * it (the FP ease-back already pulls back to show Mario talking). Camera-flourish-only cutscenes
+ * (star-spawn pans, the prepare-cannon flyby...) are reported as already played so behaviors
+ * waiting on them advance immediately; flying the view around the level is exactly what first
+ * person shouldn't do. Switching view modes mid-dialog hands off cleanly in both directions
+ * because the real cutscene state (c->cutscene, gCutsceneTimer, sCutsceneShot) stays in sync.
+ */
+static void first_person_pump_cutscenes(struct Camera *c) {
+    // Consume cutscenes armed by objects (get_cutscene_from_mario_status normally does this).
+    if (c->cutscene == 0 && sObjectCutscene != 0) {
+        u8 pending = sObjectCutscene;
+        sObjectCutscene = 0;
+        if (first_person_cutscene_runs(pending)) {
+            start_cutscene(c, pending);
+        } else {
+            gRecentCutscene = pending;
+            sFramesSinceCutsceneEnded = 0;
+        }
+    }
+    // One-shot camera events (doors, door warps) are camera presentation we skip in first person;
+    // eat them so a stale event can't fire its cutscene later when the player switches view mode.
+    sMarioCamState->cameraEvent = 0;
+
+    if (c->cutscene != 0) {
+        // Run the real cutscene logic with the pose pinned: snapshot the camera and Lakitu, play,
+        // then put the pose back while keeping every state change the cutscene made.
+        struct LakituState savedLakitu = gLakituState;
+        Vec3f savedPos, savedFocus;
+        vec3f_copy(savedPos, c->pos);
+        vec3f_copy(savedFocus, c->focus);
+        s16 savedYaw = c->yaw;
+        s16 savedNextYaw = c->nextYaw;
+
+        sYawSpeed = 0;
+        play_cutscene(c);
+        sFramesSinceCutsceneEnded = 0;
+
+        gLakituState = savedLakitu;
+        vec3f_copy(c->pos, savedPos);
+        vec3f_copy(c->focus, savedFocus);
+        c->yaw = savedYaw;
+        c->nextYaw = savedNextYaw;
+    } else if (gRecentCutscene != 0 && sFramesSinceCutsceneEnded < 8) {
+        // Mirror update_camera's recently-played expiry so a finished dialog's response can't
+        // replay into the next interaction of the same type.
+        sFramesSinceCutsceneEnded++;
+        if (sFramesSinceCutsceneEnded >= 8) {
+            gRecentCutscene = 0;
+            sFramesSinceCutsceneEnded = 0;
+        }
+    }
+}
+
+/**
  * The main camera update function.
  * Gets controller input, checks for cutscenes, handles mode changes, and moves the camera
  */
@@ -3207,6 +3288,12 @@ void update_camera(struct Camera *c) {
     }
 
     if ((gOverrideFreezeCamera || get_first_person_enabled()) && !gDjuiInMainMenu) {
+        // First person never moves the camera here, but interactions still need the cutscene
+        // machinery (see first_person_pump_cutscenes). gOverrideFreezeCamera (a Lua mod freeze)
+        // keeps its full-freeze semantics and skips the pump.
+        if (!gOverrideFreezeCamera) {
+            first_person_pump_cutscenes(c);
+        }
         return;
     }
 

@@ -7,10 +7,19 @@
 
 #define FIRST_PERSON_MARIO_HEAD_POS 120
 #define FIRST_PERSON_MARIO_HEAD_POS_SHORT 60
+// Eye height while the body is PRONE on the ground (belly/butt slides, long-jump slides, knocked flat).
+// Lower than the crouch/crawl height: the head is basically at floor level when sliding on the stomach.
+#define FIRST_PERSON_MARIO_HEAD_POS_PRONE 36
 
 // Peak side-flip lean (s16 angle units; 0x2000 ~ 45 deg). A side flip tips the view this far toward the
 // side it flips and settles back to level, so it reads as a side flip without a disorienting barrel roll.
 #define FIRST_PERSON_SIDE_FLIP_LEAN 0x2000
+// Peak hurt tip (s16 angle units; ~45 deg). Knockbacks tip the view the way the hit threw Mario - back
+// hits look up as you land on your back, forward hits look down - and settle back to level.
+#define FIRST_PERSON_HURT_PITCH 0x2000
+// Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
+// head-first lunge and settles by the time the slide starts.
+#define FIRST_PERSON_DIVE_PITCH 0x1800
 
 struct FirstPersonCamera {
     bool enabled;
