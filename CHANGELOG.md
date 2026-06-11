@@ -23,6 +23,16 @@ First person
   on your back, forward hits look down - and settle back to level. The dive
   (and, gentler, the long jump) leans into the head-first lunge. Like the flip
   jumps, these only move the view when the FP Flip Cam toggle is on.
+- FP Flip Cam also covers dying, melee and falling out of the level. Dying
+  tips the view over with the death animation and holds it there - onto your
+  back for the classic standing death, forward on the stomach - while the eye
+  sinks with the collapse; quicksand mostly sinks, drowning settles gently
+  back, electrocution is a jolt that recovers. Punches, the moving punch and
+  the jump kick lean into the hit, each hit of the combo with its own little
+  lean. The crouch kick rolls the already-low view with the sweeping legs.
+  And falling out of the level is now cinematic: once the fall is fatal, the
+  view eases up toward the level shrinking away above you and holds there
+  until the death warp - a last look at where you fell from.
 
 ## v0.5 - 2026-06-10
 

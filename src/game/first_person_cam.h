@@ -20,6 +20,18 @@
 // Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
 // head-first lunge and settles by the time the slide starts.
 #define FIRST_PERSON_DIVE_PITCH 0x1800
+// Peak melee lean (~17 deg). Punches, the moving punch and the jump kick lean the view into the hit and
+// settle by the follow-through; the punch combo swaps animations per hit, so each hit gets its own lean.
+#define FIRST_PERSON_MELEE_PITCH 0x0C00
+// Peak death tip (~56 deg). Dying eases the view over with the death animation and HOLDS it there -
+// backward for the classic standing death, forward for dying on the stomach - until the death warp.
+#define FIRST_PERSON_DEATH_PITCH 0x2800
+// Peak crouch-sweep roll (~31 deg). The crouch kick (breakdance sweep) rolls the already-low view with
+// the sweeping legs and settles level, like a tighter side-flip lean.
+#define FIRST_PERSON_SWEEP_ROLL 0x1600
+// Fall-out-of-level look-up (~67 deg). Once the only floor below is the death plane the fall is already
+// fatal, so the view eases up toward the level shrinking away above you and holds until the death warp.
+#define FIRST_PERSON_FALL_DEATH_PITCH 0x3000
 
 struct FirstPersonCamera {
     bool enabled;
