@@ -407,8 +407,13 @@ s16 first_person_flip_roll(struct MarioState *m) {
         u32 elapsed = gGlobalTimer - sFallOutPrevTimer;
         sFallOutPrevTimer = gGlobalTimer;
         if (elapsed > 4) { elapsed = 4; } // first call, or the toggle was off for a while
-        bool fallingOut = (m->action & ACT_FLAG_AIR) && m->vel[1] < 0.0f
-                       && m->floor != NULL && m->floor->type == SURFACE_DEATH_PLANE;
+        // Engages while falling over the death plane; once engaged it HOLDS as long as the death plane
+        // is still the floor - the warp fires above the plane but Mario can physically touch down on it
+        // before the fade finishes, and the look-up should ride through that landing, not tip back down
+        // mid-fade. Walking back onto real ground (a survivable gap crossing) still eases it out.
+        bool overDeathPlane = m->floor != NULL && m->floor->type == SURFACE_DEATH_PLANE;
+        bool fallingOut = overDeathPlane
+                       && (((m->action & ACT_FLAG_AIR) && m->vel[1] < 0.0f) || sFallOutRamp > 0.0f);
         sFallOutRamp += (fallingOut ? 1.0f : -2.0f) * (f32)elapsed / 45.0f; // ~1.5s up, faster back out
         if (sFallOutRamp < 0.0f) { sFallOutRamp = 0.0f; }
         if (sFallOutRamp > 1.0f) { sFallOutRamp = 1.0f; }
@@ -495,13 +500,25 @@ s16 first_person_flip_roll(struct MarioState *m) {
         if (progress > 1.0f) { progress = 1.0f; }
 
         if (tipPeak != 0) {
-            // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
-            // so a hit or a lunge moves the view without ever flipping the world - and an animation that
-            // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
-            // Strikes skew the curve (sqrt of progress): the lean lands WITH the hit a quarter of the way
-            // into the animation, then eases out through the follow-through, instead of rocking evenly.
-            f32 p = strike ? sqrtf(progress) : progress;
-            f32 tip = sins((s16)(p * 32768.0f));
+            f32 tip;
+            if (strike) {
+                // Strike envelope: smoothstep up to the peak about a third into the swing, smoothstep
+                // back down through the follow-through. (An earlier curve - half sine over the square
+                // root of progress - reached a third of its peak within the first frame; that step read
+                // as a jolt rather than a lean, especially in a headset.)
+                if (progress < 0.32f) {
+                    f32 t = progress / 0.32f;
+                    tip = t * t * (3.0f - 2.0f * t);
+                } else {
+                    f32 t = (progress - 0.32f) / 0.68f;
+                    tip = 1.0f - t * t * (3.0f - 2.0f * t);
+                }
+            } else {
+                // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
+                // so a hit or a lunge moves the view without ever flipping the world - and an animation that
+                // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
+                tip = sins((s16)(progress * 32768.0f));
+            }
             actionAngle = (s16)(tip * dir * (f32)tipPeak);
         } else if (holdPeak != 0) {
             // Death tip: eases over with the animation and STAYS there (the death anims hold their last

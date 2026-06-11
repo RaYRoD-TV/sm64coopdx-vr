@@ -29,10 +29,10 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..0416c1907
+index 000000000..0380b738a
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,197 @@
 +# Changelog
 +
 +## Unreleased
@@ -84,6 +84,15 @@ index 000000000..0416c1907
 +  the view eases up toward the level shrinking away above you - and the fall
 +  is allowed to run much closer to the bottom before the fade, so the last
 +  look at where you fell from gets its time.
++- Touching down on a kill plane no longer hurts: the death warp is already on
++  its way when you reach one, so the hard-fall knockback, the pain scream and
++  the camera shake that could fire in the last moments before the fade are
++  gone, and the fall-out look-up rides through that touchdown instead of
++  tipping back down mid-fade.
++- The melee lean is gentler: it eases up to its peak about a third into the
++  swing instead of stepping there almost instantly, and the peak angle is
++  smaller. The old curve read as a jolt rather than a lean, especially in the
++  headset, and melee fires constantly.
 +
 +## v0.5 - 2026-06-10
 +
@@ -1007,7 +1016,7 @@ index 5406e94eb..ea0c75e5c 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22b7..47da2f591 100644
+index 4bfed22b7..7d2c9c2b3 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
 @@ -9,12 +9,14 @@
@@ -1307,7 +1316,7 @@ index 4bfed22b7..47da2f591 100644
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +354,196 @@ void first_person_reset(void) {
+@@ -201,3 +354,213 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -1364,8 +1373,13 @@ index 4bfed22b7..47da2f591 100644
 +        u32 elapsed = gGlobalTimer - sFallOutPrevTimer;
 +        sFallOutPrevTimer = gGlobalTimer;
 +        if (elapsed > 4) { elapsed = 4; } // first call, or the toggle was off for a while
-+        bool fallingOut = (m->action & ACT_FLAG_AIR) && m->vel[1] < 0.0f
-+                       && m->floor != NULL && m->floor->type == SURFACE_DEATH_PLANE;
++        // Engages while falling over the death plane; once engaged it HOLDS as long as the death plane
++        // is still the floor - the warp fires above the plane but Mario can physically touch down on it
++        // before the fade finishes, and the look-up should ride through that landing, not tip back down
++        // mid-fade. Walking back onto real ground (a survivable gap crossing) still eases it out.
++        bool overDeathPlane = m->floor != NULL && m->floor->type == SURFACE_DEATH_PLANE;
++        bool fallingOut = overDeathPlane
++                       && (((m->action & ACT_FLAG_AIR) && m->vel[1] < 0.0f) || sFallOutRamp > 0.0f);
 +        sFallOutRamp += (fallingOut ? 1.0f : -2.0f) * (f32)elapsed / 45.0f; // ~1.5s up, faster back out
 +        if (sFallOutRamp < 0.0f) { sFallOutRamp = 0.0f; }
 +        if (sFallOutRamp > 1.0f) { sFallOutRamp = 1.0f; }
@@ -1452,13 +1466,25 @@ index 4bfed22b7..47da2f591 100644
 +        if (progress > 1.0f) { progress = 1.0f; }
 +
 +        if (tipPeak != 0) {
-+            // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
-+            // so a hit or a lunge moves the view without ever flipping the world - and an animation that
-+            // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
-+            // Strikes skew the curve (sqrt of progress): the lean lands WITH the hit a quarter of the way
-+            // into the animation, then eases out through the follow-through, instead of rocking evenly.
-+            f32 p = strike ? sqrtf(progress) : progress;
-+            f32 tip = sins((s16)(p * 32768.0f));
++            f32 tip;
++            if (strike) {
++                // Strike envelope: smoothstep up to the peak about a third into the swing, smoothstep
++                // back down through the follow-through. (An earlier curve - half sine over the square
++                // root of progress - reached a third of its peak within the first frame; that step read
++                // as a jolt rather than a lean, especially in a headset.)
++                if (progress < 0.32f) {
++                    f32 t = progress / 0.32f;
++                    tip = t * t * (3.0f - 2.0f * t);
++                } else {
++                    f32 t = (progress - 0.32f) / 0.68f;
++                    tip = 1.0f - t * t * (3.0f - 2.0f * t);
++                }
++            } else {
++                // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
++                // so a hit or a lunge moves the view without ever flipping the world - and an animation that
++                // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
++                tip = sins((s16)(progress * 32768.0f));
++            }
 +            actionAngle = (s16)(tip * dir * (f32)tipPeak);
 +        } else if (holdPeak != 0) {
 +            // Death tip: eases over with the animation and STAYS there (the death anims hold their last
@@ -1505,10 +1531,10 @@ index 4bfed22b7..47da2f591 100644
 +    return m->action == ACT_PUNCHING && m->actionArg == 9; // crouch sweep kick: a low roll with the legs
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf8f..96e13fdae 100644
+index 42bfeaf8f..26449e5f7 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
-@@ -7,6 +7,35 @@
+@@ -7,6 +7,36 @@
  
  #define FIRST_PERSON_MARIO_HEAD_POS 120
  #define FIRST_PERSON_MARIO_HEAD_POS_SHORT 60
@@ -1525,9 +1551,10 @@ index 42bfeaf8f..96e13fdae 100644
 +// Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
 +// head-first lunge and settles by the time the slide starts.
 +#define FIRST_PERSON_DIVE_PITCH 0x1800
-+// Peak melee lean (~17 deg). Punches, the moving punch and the jump kick lean the view into the hit and
-+// settle by the follow-through; the punch combo swaps animations per hit, so each hit gets its own lean.
-+#define FIRST_PERSON_MELEE_PITCH 0x0C00
++// Peak melee lean (~13 deg). Punches lean the view in with the hit and the kicks lean back behind the
++// extended leg, easing out through the follow-through; the punch combo swaps animations per hit, so each
++// hit gets its own lean. Kept modest - melee fires constantly, so a big tilt reads as jarring fast.
++#define FIRST_PERSON_MELEE_PITCH 0x0900
 +// Peak death tip (~56 deg). Dying eases the view over with the death animation and HOLDS it there -
 +// backward for the classic standing death, forward for dying on the stomach - until the death warp.
 +#define FIRST_PERSON_DEATH_PITCH 0x2800
@@ -1544,7 +1571,7 @@ index 42bfeaf8f..96e13fdae 100644
  
  struct FirstPersonCamera {
      bool enabled;
-@@ -14,6 +43,9 @@ struct FirstPersonCamera {
+@@ -14,6 +44,9 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
@@ -1554,7 +1581,7 @@ index 42bfeaf8f..96e13fdae 100644
      s16 pitch;
      s16 yaw;
      f32 crouch;
-@@ -35,4 +67,22 @@ void first_person_update(void);
+@@ -35,4 +68,22 @@ void first_person_update(void);
  /* |description|Resets first person|descriptionEnd| */
  void first_person_reset(void);
  
@@ -1764,6 +1791,33 @@ index 3e7135352..7036144a0 100644
          m->input |= INPUT_NONZERO_ANALOG;
      } else {
          m->intendedYaw = m->faceAngle[1];
+diff --git a/src/game/mario_actions_airborne.c b/src/game/mario_actions_airborne.c
+index 04209460d..8a97a3ef9 100644
+--- a/src/game/mario_actions_airborne.c
++++ b/src/game/mario_actions_airborne.c
+@@ -116,7 +116,12 @@ s32 check_fall_damage(struct MarioState *m, u32 hardFallAction) {
+ 
+ #pragma GCC diagnostic pop
+ 
+-    if (m->action != ACT_TWIRLING && m->floor && m->floor->type != SURFACE_BURNING) {
++    // No pain on a kill plane: the death warp is already pending when you touch one (check_death_barrier
++    // fires above it), so the hard-fall knockback, the hurt scream and the camera shake are just noise
++    // before the fade - it especially stood out in first person, where the fall is let run close to the
++    // plane so the look-up cinematic gets its time.
++    if (m->action != ACT_TWIRLING && m->floor && m->floor->type != SURFACE_BURNING
++        && m->floor->type != SURFACE_DEATH_PLANE) {
+         if (m->vel[1] < -55.0f) {
+             if (fallHeight > 3000.0f) {
+                 m->hurtCounter += (m->flags & MARIO_CAP_ON_HEAD) ? 16 : 24;
+@@ -165,7 +170,7 @@ s32 should_get_stuck_in_ground(struct MarioState *m) {
+     s32 type = floor->type;
+ 
+     if ((terrainType == TERRAIN_SNOW || terrainType == TERRAIN_SAND)
+-        && type != SURFACE_BURNING && SURFACE_IS_NOT_HARD(type)) {
++        && type != SURFACE_BURNING && type != SURFACE_DEATH_PLANE && SURFACE_IS_NOT_HARD(type)) {
+         if (!(flags & 0x01) && m->peakHeight - m->pos[1] > 1000.0f && floor->normal.y >= 0.8660254f) {
+             return TRUE;
+         }
 diff --git a/src/game/mario_actions_cutscene.c b/src/game/mario_actions_cutscene.c
 index 89e46a1eb..f5a24e0de 100644
 --- a/src/game/mario_actions_cutscene.c

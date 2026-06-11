@@ -49,6 +49,15 @@ First person
   the view eases up toward the level shrinking away above you - and the fall
   is allowed to run much closer to the bottom before the fade, so the last
   look at where you fell from gets its time.
+- Touching down on a kill plane no longer hurts: the death warp is already on
+  its way when you reach one, so the hard-fall knockback, the pain scream and
+  the camera shake that could fire in the last moments before the fade are
+  gone, and the fall-out look-up rides through that touchdown instead of
+  tipping back down mid-fade.
+- The melee lean is gentler: it eases up to its peak about a third into the
+  swing instead of stepping there almost instantly, and the peak angle is
+  smaller. The old curve read as a jolt rather than a lean, especially in the
+  headset, and melee fires constantly.
 
 ## v0.5 - 2026-06-10
 
