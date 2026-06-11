@@ -27,12 +27,17 @@ First person
   tips the view over with the death animation and holds it there - onto your
   back for the classic standing death, forward on the stomach - while the eye
   sinks with the collapse; quicksand mostly sinks, drowning settles gently
-  back, electrocution is a jolt that recovers. Punches, the moving punch and
-  the jump kick lean into the hit, each hit of the combo with its own little
-  lean. The crouch kick rolls the already-low view with the sweeping legs.
-  And falling out of the level is now cinematic: once the fall is fatal, the
-  view eases up toward the level shrinking away above you and holds there
-  until the death warp - a last look at where you fell from.
+  back, electrocution is a jolt that recovers. The death warp waits a couple
+  of seconds longer so you actually get to lie there before the fade to black
+  (the fade used to start the instant the animation ended and cut the moment
+  off). Melee leans with the strike, the way the animation moves the body:
+  punches lean in, the ground kick and jump kick lean back behind the extended
+  leg, each landing fast with the hit and easing out through the
+  follow-through. The crouch kick rolls the already-low view with the sweeping
+  legs. And falling out of the level is now cinematic: once the fall is fatal,
+  the view eases up toward the level shrinking away above you - and the fall
+  is allowed to run much closer to the bottom before the fade, so the last
+  look at where you fell from gets its time.
 
 ## v0.5 - 2026-06-10
 

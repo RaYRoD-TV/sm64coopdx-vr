@@ -29,10 +29,10 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..536b13b5f
+index 000000000..b19a44063
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,177 @@
 +# Changelog
 +
 +## Unreleased
@@ -62,12 +62,17 @@ index 000000000..536b13b5f
 +  tips the view over with the death animation and holds it there - onto your
 +  back for the classic standing death, forward on the stomach - while the eye
 +  sinks with the collapse; quicksand mostly sinks, drowning settles gently
-+  back, electrocution is a jolt that recovers. Punches, the moving punch and
-+  the jump kick lean into the hit, each hit of the combo with its own little
-+  lean. The crouch kick rolls the already-low view with the sweeping legs.
-+  And falling out of the level is now cinematic: once the fall is fatal, the
-+  view eases up toward the level shrinking away above you and holds there
-+  until the death warp - a last look at where you fell from.
++  back, electrocution is a jolt that recovers. The death warp waits a couple
++  of seconds longer so you actually get to lie there before the fade to black
++  (the fade used to start the instant the animation ended and cut the moment
++  off). Melee leans with the strike, the way the animation moves the body:
++  punches lean in, the ground kick and jump kick lean back behind the extended
++  leg, each landing fast with the hit and easing out through the
++  follow-through. The crouch kick rolls the already-low view with the sweeping
++  legs. And falling out of the level is now cinematic: once the fall is fatal,
++  the view eases up toward the level shrinking away above you - and the fall
++  is allowed to run much closer to the bottom before the fade, so the last
++  look at where you fell from gets its time.
 +
 +## v0.5 - 2026-06-10
 +
@@ -991,7 +996,7 @@ index 5406e94eb..ea0c75e5c 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22b7..960e73182 100644
+index 4bfed22b7..47da2f591 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
 @@ -9,12 +9,14 @@
@@ -1034,7 +1039,7 @@ index 4bfed22b7..960e73182 100644
          return true;
      }
      if (find_object_with_behavior(smlua_override_behavior(bhvActSelector)) != NULL) { return true; }
-@@ -57,12 +68,72 @@ bool get_first_person_enabled(void) {
+@@ -57,12 +68,79 @@ bool get_first_person_enabled(void) {
  
  void set_first_person_enabled(bool enable) {
      gFirstPersonCamera.enabled = enable;
@@ -1049,6 +1054,13 @@ index 4bfed22b7..960e73182 100644
 +void first_person_set_flip_cam(bool on)   { gFirstPersonCamera.flipCam = on; }
 +bool first_person_get_interact_cam(void)  { return gFirstPersonCamera.interactCam; }
 +void first_person_set_interact_cam(bool on){ gFirstPersonCamera.interactCam = on; }
++
++// The death/fall cinematics (tip over and stay down, look back up the pit) need the death warp held
++// back a beat to be seen at all - the warp's fade starts immediately and in VR also swaps the view to
++// the flat panel. Death handlers gate their hold on this: local first person with FP Flip Cam on.
++bool first_person_death_cinematic_active(void) {
++    return get_first_person_enabled() && gFirstPersonCamera.flipCam;
++}
 +
 +// VR Tabletop: the C-up "look around" first-person state (right-stick up) freezes Mario and blocks movement,
 +// which is pointless in the tabletop diorama. While in tabletop, stop it engaging and back out if already in
@@ -1107,7 +1119,7 @@ index 4bfed22b7..960e73182 100644
  
      if (mouse_relative_enabled) {
          // hack: make c buttons work for moving the camera
-@@ -77,7 +148,7 @@ static void first_person_camera_update(void) {
+@@ -77,7 +155,7 @@ static void first_person_camera_update(void) {
  
          // update pitch
          if (!gFirstPersonCamera.forcePitch) {
@@ -1116,7 +1128,7 @@ index 4bfed22b7..960e73182 100644
              gFirstPersonCamera.pitch = clamp(gFirstPersonCamera.pitch, -0x3F00, 0x3F00);
          }
  
-@@ -86,7 +157,7 @@ static void first_person_camera_update(void) {
+@@ -86,7 +164,7 @@ static void first_person_camera_update(void) {
              if (m->controller->buttonDown & L_TRIG && gFirstPersonCamera.centerL) {
                  gFirstPersonCamera.yaw = m->faceAngle[1] + 0x8000;
              } else {
@@ -1125,7 +1137,7 @@ index 4bfed22b7..960e73182 100644
              }
          }
      }
-@@ -106,46 +177,110 @@ static void first_person_camera_update(void) {
+@@ -106,46 +184,110 @@ static void first_person_camera_update(void) {
              break;
          }
      }
@@ -1257,7 +1269,7 @@ index 4bfed22b7..960e73182 100644
      gLakituState.posHSpeed = 0;
      gLakituState.posVSpeed = 0;
      gLakituState.focHSpeed = 0;
-@@ -174,7 +309,15 @@ void first_person_update(void) {
+@@ -174,7 +316,15 @@ void first_person_update(void) {
              level_trigger_warp(m, WARP_OP_LOOK_UP);
          }
  
@@ -1274,7 +1286,7 @@ index 4bfed22b7..960e73182 100644
          if (m->heldObj) {
              Vec3f camDir = {
                  m->area->camera->focus[0] - m->area->camera->pos[0],
-@@ -193,6 +336,9 @@ void first_person_update(void) {
+@@ -193,6 +343,9 @@ void first_person_update(void) {
  void first_person_reset(void) {
      gFirstPersonCamera.forceRoll = false;
      gFirstPersonCamera.centerL = true;
@@ -1284,7 +1296,7 @@ index 4bfed22b7..960e73182 100644
      gFirstPersonCamera.pitch = 0;
      gFirstPersonCamera.yaw = 0;
      gFirstPersonCamera.crouch = 0;
-@@ -201,3 +347,187 @@ void first_person_reset(void) {
+@@ -201,3 +354,196 @@ void first_person_reset(void) {
      gFirstPersonCamera.offset[1] = 0;
      gFirstPersonCamera.offset[2] = 0;
  }
@@ -1351,6 +1363,7 @@ index 4bfed22b7..960e73182 100644
 +    f32 dir = 0.0f;
 +    s16 tipPeak = 0;  // nonzero = PARTIAL tip that rises and settles (hurt / dive / melee / sweep)
 +    s16 holdPeak = 0; // nonzero = tip that eases over and STAYS down (deaths)
++    bool strike = false; // melee: skew the tip so the lean LANDS with the hit, then eases out
 +    bool flips = true;
 +    switch (m->action) {
 +        case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward (pitch)
@@ -1389,16 +1402,21 @@ index 4bfed22b7..960e73182 100644
 +        // eye height, the same way a crawl does.
 +        case ACT_DIVE:                dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH; break;
 +        case ACT_LONG_JUMP:           dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH / 2; break;
-+        // Melee: lean into the hit, settle by the follow-through. The punch combo swaps animations per
-+        // hit, so each punch and the finishing kick get their own little lean. The crouch kick (the
-+        // breakdance sweep, ACT_PUNCHING arg 9) instead ROLLS the already-crouched view with the
-+        // sweeping legs - first_person_flip_is_side routes it to the roll axis like the side flip.
++        // Melee: lean WITH the strike - in or out, the way the animation moves the body - snapping in
++        // fast and easing out through the follow-through (no symmetric rocking). Punches drive the body
++        // forward, so the view leans in; the ground kick (combo finisher, arg 6+) and the jump kick arch
++        // the body BACK behind the extended leg, so the view leans out. The punch combo swaps animations
++        // per hit, so each hit gets its own lean. The crouch kick (the breakdance sweep, arg 9) instead
++        // ROLLS the already-crouched view with the sweeping legs - first_person_flip_is_side routes it
++        // to the roll axis like the side flip.
 +        case ACT_PUNCHING:
-+            if (m->actionArg == 9) { dir = -1.0f; tipPeak = FIRST_PERSON_SWEEP_ROLL; }
-+            else                   { dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; }
++            if (m->actionArg == 9)      { dir = -1.0f; tipPeak = FIRST_PERSON_SWEEP_ROLL; }  // crouch sweep: roll
++            else if (m->actionArg >= 6) { dir = -1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; } // ground kick: lean out
++            else                        { dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; } // punches: lean in
++            strike = true;
 +            break;
-+        case ACT_MOVE_PUNCHING:       dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; break;
-+        case ACT_JUMP_KICK:           dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; break;
++        case ACT_MOVE_PUNCHING:       dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; strike = true; break;
++        case ACT_JUMP_KICK:           dir = -1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; strike = true; break;
 +        // Dying: ease the view over with the death animation and STAY down (the death anims hold their
 +        // last frame, so the tip holds until the death warp resets the run). Backward for the classic
 +        // standing death and dying on the back, forward on the stomach. Quicksand mostly SINKS (the
@@ -1426,7 +1444,10 @@ index 4bfed22b7..960e73182 100644
 +            // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
 +            // so a hit or a lunge moves the view without ever flipping the world - and an animation that
 +            // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
-+            f32 tip = sins((s16)(progress * 32768.0f));
++            // Strikes skew the curve (sqrt of progress): the lean lands WITH the hit a quarter of the way
++            // into the animation, then eases out through the follow-through, instead of rocking evenly.
++            f32 p = strike ? sqrtf(progress) : progress;
++            f32 tip = sins((s16)(p * 32768.0f));
 +            actionAngle = (s16)(tip * dir * (f32)tipPeak);
 +        } else if (holdPeak != 0) {
 +            // Death tip: eases over with the animation and STAYS there (the death anims hold their last
@@ -1473,10 +1494,10 @@ index 4bfed22b7..960e73182 100644
 +    return m->action == ACT_PUNCHING && m->actionArg == 9; // crouch sweep kick: a low roll with the legs
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf8f..5a3a4af75 100644
+index 42bfeaf8f..96e13fdae 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
-@@ -7,6 +7,31 @@
+@@ -7,6 +7,35 @@
  
  #define FIRST_PERSON_MARIO_HEAD_POS 120
  #define FIRST_PERSON_MARIO_HEAD_POS_SHORT 60
@@ -1505,10 +1526,14 @@ index 42bfeaf8f..5a3a4af75 100644
 +// Fall-out-of-level look-up (~67 deg). Once the only floor below is the death plane the fall is already
 +// fatal, so the view eases up toward the level shrinking away above you and holds until the death warp.
 +#define FIRST_PERSON_FALL_DEATH_PITCH 0x3000
++// Extra frames to lie where you died before the death warp fires (FP Flip Cam only). The warp's fade
++// used to start the moment the death animation ended - and in VR the fade also swaps to the flat panel -
++// so the tip-over never got its moment. Two seconds of lying there lets it land.
++#define FIRST_PERSON_DEATH_HOLD_FRAMES 60
  
  struct FirstPersonCamera {
      bool enabled;
-@@ -14,6 +39,9 @@ struct FirstPersonCamera {
+@@ -14,6 +43,9 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
@@ -1518,13 +1543,17 @@ index 42bfeaf8f..5a3a4af75 100644
      s16 pitch;
      s16 yaw;
      f32 crouch;
-@@ -35,4 +63,18 @@ void first_person_update(void);
+@@ -35,4 +67,22 @@ void first_person_update(void);
  /* |description|Resets first person|descriptionEnd| */
  void first_person_reset(void);
  
 +// First-person toggle accessors (used by the VR settings file so it can be remembered across launches).
 +bool first_person_get_flip_cam(void);       void first_person_set_flip_cam(bool on);
 +bool first_person_get_interact_cam(void);   void first_person_set_interact_cam(bool on);
++
++// True when the first-person death/fall cinematic should run: local player in first person with the
++// FP Flip Cam toggle on. Death handlers hold the death warp back a beat so the cinematic gets seen.
++bool first_person_death_cinematic_active(void);
 +
 +// VR Tabletop: back out of (and block) the C-up look-around state, which would otherwise freeze movement.
 +void first_person_exit_lookaround_for_tabletop(void);
@@ -1625,6 +1654,37 @@ index ac984fad6..f8ab6e2a7 100644
                  || (gPlayer1Controller->buttonPressed & B_BUTTON)) {
                  if (gLastDialogPageStrPos == -1) {
                      handle_special_dialog_text(gDialogID);
+diff --git a/src/game/interaction.c b/src/game/interaction.c
+index a102e8c5f..23f289b95 100644
+--- a/src/game/interaction.c
++++ b/src/game/interaction.c
+@@ -11,6 +11,7 @@
+ #include "dialog_ids.h"
+ #include "engine/math_util.h"
+ #include "engine/surface_collision.h"
++#include "first_person_cam.h"
+ #include "game_init.h"
+ #include "interaction.h"
+ #include "level_update.h"
+@@ -2440,7 +2441,17 @@ void mario_process_interactions(struct MarioState *m) {
+ void check_death_barrier(struct MarioState *m) {
+     if (!m || m->playerIndex != 0) { return; }
+ 
+-    if (m->pos[1] < m->floorHeight + 2048.0f) {
++    // First person with FP Flip Cam: falling out of the level eases the view up toward the level
++    // shrinking away above you, so let the fall run much closer to the death plane before the warp's
++    // fade starts - that look-up needs the extra seconds to be seen. Players who would bubble instead
++    // of dying (and already-bubbled players, whose float height is pinned to the stock margin below)
++    // keep the 2048 buffer so the bubble doesn't snap upward.
++    f32 margin = 2048.0f;
++    if (first_person_death_cinematic_active() && m->action != ACT_BUBBLED
++        && !(mario_can_bubble(m) && m->numLives > 0)) {
++        margin = 256.0f;
++    }
++    if (m->pos[1] < m->floorHeight + margin) {
+         bool allowDeath = true;
+         smlua_call_event_hooks(HOOK_ON_DEATH, m, &allowDeath);
+         if (!allowDeath) { return; }
 diff --git a/src/game/level_update.c b/src/game/level_update.c
 index 02b821633..57639a9b9 100644
 --- a/src/game/level_update.c
@@ -1693,6 +1753,39 @@ index 3e7135352..7036144a0 100644
          m->input |= INPUT_NONZERO_ANALOG;
      } else {
          m->intendedYaw = m->faceAngle[1];
+diff --git a/src/game/mario_actions_cutscene.c b/src/game/mario_actions_cutscene.c
+index 89e46a1eb..f5a24e0de 100644
+--- a/src/game/mario_actions_cutscene.c
++++ b/src/game/mario_actions_cutscene.c
+@@ -11,6 +11,7 @@
+ #include "engine/graph_node.h"
+ #include "engine/math_util.h"
+ #include "engine/surface_collision.h"
++#include "first_person_cam.h"
+ #include "game_init.h"
+ #include "gfx_dimensions.h"
+ #include "ingame_menu.h"
+@@ -834,10 +835,17 @@ Handles shared logic for Mario's various death states. Plays the specified death
+ s32 common_death_handler(struct MarioState *m, s32 animation, s32 frameToDeathWarp) {
+     if (!m) { return 0; }
+     s32 animFrame = set_character_animation(m, animation);
+-    if (animFrame == frameToDeathWarp) {
+-        if (m->playerIndex != 0) {
+-            // do nothing
++    // First person with FP Flip Cam: the view tips over with the death and the eye sinks to the floor,
++    // but the death warp used to fire the moment the animation ended - and its fade (which in VR also
++    // swaps the view to the flat panel) cut the cinematic off before it registered. Hold the warp for a
++    // couple of seconds so you get to lie there first. actionState latches the one-shot trigger (the
++    // stock == check could not re-fire either); none of the deaths that come through here use
++    // actionState or actionTimer themselves, and both reset on every action change.
++    if (m->playerIndex == 0 && animFrame >= frameToDeathWarp && m->actionState == 0) {
++        if (first_person_death_cinematic_active() && m->actionTimer++ < FIRST_PERSON_DEATH_HOLD_FRAMES) {
++            // lying there, tipped over - let the moment breathe before the fade
+         } else {
++            m->actionState = 1;
+             bool allowDeath = true;
+             smlua_call_event_hooks(HOOK_ON_DEATH, m, &allowDeath);
+             if (!allowDeath) { return animFrame; }
 diff --git a/src/game/rendering_graph_node.c b/src/game/rendering_graph_node.c
 index 82d0da8f7..0f78c0449 100644
 --- a/src/game/rendering_graph_node.c

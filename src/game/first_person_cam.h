@@ -32,6 +32,10 @@
 // Fall-out-of-level look-up (~67 deg). Once the only floor below is the death plane the fall is already
 // fatal, so the view eases up toward the level shrinking away above you and holds until the death warp.
 #define FIRST_PERSON_FALL_DEATH_PITCH 0x3000
+// Extra frames to lie where you died before the death warp fires (FP Flip Cam only). The warp's fade
+// used to start the moment the death animation ended - and in VR the fade also swaps to the flat panel -
+// so the tip-over never got its moment. Two seconds of lying there lets it land.
+#define FIRST_PERSON_DEATH_HOLD_FRAMES 60
 
 struct FirstPersonCamera {
     bool enabled;
@@ -66,6 +70,10 @@ void first_person_reset(void);
 // First-person toggle accessors (used by the VR settings file so it can be remembered across launches).
 bool first_person_get_flip_cam(void);       void first_person_set_flip_cam(bool on);
 bool first_person_get_interact_cam(void);   void first_person_set_interact_cam(bool on);
+
+// True when the first-person death/fall cinematic should run: local player in first person with the
+// FP Flip Cam toggle on. Death handlers hold the death warp back a beat so the cinematic gets seen.
+bool first_person_death_cinematic_active(void);
 
 // VR Tabletop: back out of (and block) the C-up look-around state, which would otherwise freeze movement.
 void first_person_exit_lookaround_for_tabletop(void);

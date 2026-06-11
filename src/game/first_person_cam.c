@@ -80,6 +80,13 @@ void first_person_set_flip_cam(bool on)   { gFirstPersonCamera.flipCam = on; }
 bool first_person_get_interact_cam(void)  { return gFirstPersonCamera.interactCam; }
 void first_person_set_interact_cam(bool on){ gFirstPersonCamera.interactCam = on; }
 
+// The death/fall cinematics (tip over and stay down, look back up the pit) need the death warp held
+// back a beat to be seen at all - the warp's fade starts immediately and in VR also swaps the view to
+// the flat panel. Death handlers gate their hold on this: local first person with FP Flip Cam on.
+bool first_person_death_cinematic_active(void) {
+    return get_first_person_enabled() && gFirstPersonCamera.flipCam;
+}
+
 // VR Tabletop: the C-up "look around" first-person state (right-stick up) freezes Mario and blocks movement,
 // which is pointless in the tabletop diorama. While in tabletop, stop it engaging and back out if already in
 // it. Called every frame from pc_main's VR loop (it no-ops outside tabletop).
@@ -410,6 +417,7 @@ s16 first_person_flip_roll(struct MarioState *m) {
     f32 dir = 0.0f;
     s16 tipPeak = 0;  // nonzero = PARTIAL tip that rises and settles (hurt / dive / melee / sweep)
     s16 holdPeak = 0; // nonzero = tip that eases over and STAYS down (deaths)
+    bool strike = false; // melee: skew the tip so the lean LANDS with the hit, then eases out
     bool flips = true;
     switch (m->action) {
         case ACT_TRIPLE_JUMP:         dir =  1.0f; break; // forward (pitch)
@@ -448,16 +456,21 @@ s16 first_person_flip_roll(struct MarioState *m) {
         // eye height, the same way a crawl does.
         case ACT_DIVE:                dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH; break;
         case ACT_LONG_JUMP:           dir =  1.0f; tipPeak = FIRST_PERSON_DIVE_PITCH / 2; break;
-        // Melee: lean into the hit, settle by the follow-through. The punch combo swaps animations per
-        // hit, so each punch and the finishing kick get their own little lean. The crouch kick (the
-        // breakdance sweep, ACT_PUNCHING arg 9) instead ROLLS the already-crouched view with the
-        // sweeping legs - first_person_flip_is_side routes it to the roll axis like the side flip.
+        // Melee: lean WITH the strike - in or out, the way the animation moves the body - snapping in
+        // fast and easing out through the follow-through (no symmetric rocking). Punches drive the body
+        // forward, so the view leans in; the ground kick (combo finisher, arg 6+) and the jump kick arch
+        // the body BACK behind the extended leg, so the view leans out. The punch combo swaps animations
+        // per hit, so each hit gets its own lean. The crouch kick (the breakdance sweep, arg 9) instead
+        // ROLLS the already-crouched view with the sweeping legs - first_person_flip_is_side routes it
+        // to the roll axis like the side flip.
         case ACT_PUNCHING:
-            if (m->actionArg == 9) { dir = -1.0f; tipPeak = FIRST_PERSON_SWEEP_ROLL; }
-            else                   { dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; }
+            if (m->actionArg == 9)      { dir = -1.0f; tipPeak = FIRST_PERSON_SWEEP_ROLL; }  // crouch sweep: roll
+            else if (m->actionArg >= 6) { dir = -1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; } // ground kick: lean out
+            else                        { dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; } // punches: lean in
+            strike = true;
             break;
-        case ACT_MOVE_PUNCHING:       dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; break;
-        case ACT_JUMP_KICK:           dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; break;
+        case ACT_MOVE_PUNCHING:       dir =  1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; strike = true; break;
+        case ACT_JUMP_KICK:           dir = -1.0f; tipPeak = FIRST_PERSON_MELEE_PITCH; strike = true; break;
         // Dying: ease the view over with the death animation and STAY down (the death anims hold their
         // last frame, so the tip holds until the death warp resets the run). Backward for the classic
         // standing death and dying on the back, forward on the stomach. Quicksand mostly SINKS (the
@@ -485,7 +498,10 @@ s16 first_person_flip_roll(struct MarioState *m) {
             // Partial tip: rises and settles back to level over the animation (half sine, 0 -> 1 -> 0),
             // so a hit or a lunge moves the view without ever flipping the world - and an animation that
             // holds its last frame (air knockbacks while falling) sits level until the next thing happens.
-            f32 tip = sins((s16)(progress * 32768.0f));
+            // Strikes skew the curve (sqrt of progress): the lean lands WITH the hit a quarter of the way
+            // into the animation, then eases out through the follow-through, instead of rocking evenly.
+            f32 p = strike ? sqrtf(progress) : progress;
+            f32 tip = sins((s16)(p * 32768.0f));
             actionAngle = (s16)(tip * dir * (f32)tipPeak);
         } else if (holdPeak != 0) {
             // Death tip: eases over with the animation and STAYS there (the death anims hold their last
