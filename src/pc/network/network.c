@@ -33,6 +33,7 @@
 #include "menu/intro_geo.h"
 #include "game/ingame_menu.h"
 #include "game/first_person_cam.h"
+#include "pc/vr/vr.h" // vr_is_active / vr_first_person_active - keep VR's first-person state across network resets
 #include "game/envfx_snow.h"
 #include "game/mario.h"
 #include "engine/math_util.h"
@@ -766,6 +767,17 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
     cnt->extStickX = 0;
     cnt->extStickY = 0;
 
+    // VR owns the first-person view mode and its toggles (FP Flip Cam / FP Ease-Back), and they are
+    // meant to survive across sessions - but the stock reset below wipes them. Without putting them
+    // back, leaving a game and then joining a lobby with the headset in the First-person preset broke
+    // the view (the preset stayed on while the game camera dropped to third person) and quietly turned
+    // the flip cam off. Snapshot what VR owns and restore it after the wipe; flatscreen keeps the
+    // stock full reset.
+    bool vrActive = vr_is_active();
+    bool vrKeepFp = vrActive && vr_first_person_active();
+    bool vrFlipCam = first_person_get_flip_cam();
+    bool vrInteractCam = first_person_get_interact_cam();
+
     gFirstPersonCamera.enabled = false;
     gFirstPersonCamera.forcePitch = false;
     gFirstPersonCamera.forceYaw = false;
@@ -774,6 +786,11 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
     gFirstPersonCamera.fov = FIRST_PERSON_DEFAULT_FOV;
     vec3f_set(gFirstPersonCamera.offset, 0, 0, 0);
     first_person_reset();
+    if (vrActive) {
+        first_person_set_flip_cam(vrFlipCam);
+        first_person_set_interact_cam(vrInteractCam);
+        if (vrKeepFp) { gFirstPersonCamera.enabled = true; }
+    }
 
     le_shutdown();
 

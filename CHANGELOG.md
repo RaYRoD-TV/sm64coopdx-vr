@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Multiplayer
+- Joining or leaving a lobby no longer breaks the First-person view mode. The
+  network reset that runs between sessions turned the first-person camera off
+  while the headset stayed in the First-person preset (the world rendered from
+  the wrong camera until you cycled modes) and quietly switched the FP Flip
+  Cam and FP Ease-Back toggles back to their defaults. VR's view mode and
+  toggles now survive the reset, and the first-person camera re-asserts itself
+  if anything else turns it off mid-session. Nothing else in the VR build
+  touches the network layer - the protocol and version match stock v1.5.1, so
+  public lobbies work as before.
+
 First person
 - Talking to characters no longer freezes the game in first person. Toads,
   Bob-omb buddies, Koopa the Quick, cap switches and the other cutscene-driven

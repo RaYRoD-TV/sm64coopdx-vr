@@ -35,6 +35,7 @@
 #include "game/rumble_init.h"
 #include "game/level_update.h"  // sCurrPlayMode, PLAY_MODE_*, gCurrCreditsEntry, gVrInActSelector
 #include "game/ingame_menu.h"   // gMenuMode, get_dialog_id
+#include "game/first_person_cam.h" // gFirstPersonCamera / set_first_person_enabled - VR first-person lockstep
 #include "game/area.h"          // gWarpTransition.isActive - door/level transition active
 #include "dialog_ids.h"         // DIALOG_NONE
 #include "game/camera.h"               // gCamera (->mtx is the renderer's world->camera matrix)
@@ -457,13 +458,17 @@ void produce_interpolation_frames_and_delay(void) {
         if (vr_is_active()) {
             Gfx *vrDl = (Gfx *) gGfxSPTask->task.t.data_ptr;
             // EXPERIMENTAL first-person: when the VR toggle (F11) is on, turn on coopdx's first-person
-            // camera so the game renders from Mario's head. Only act on change so we don't fight the
-            // game's own first-person handling every frame.
+            // camera so the game renders from Mario's head. Act on preset change as before, BUT also
+            // re-assert every frame while the First-person preset is on: a network reset (leaving or
+            // joining a lobby) and Lua mods can clear the game-side flag without the preset changing,
+            // which used to leave the view broken until you cycled modes. Mismatch-only re-assert, so
+            // the ease-back state is never disturbed otherwise. The disable direction stays on-change
+            // only, so Theater/diorama players can still use the game's own first-person if they want.
             {
-                extern void set_first_person_enabled(bool enable); // game/first_person_cam.h
                 static bool sVrFpPrev = false;
                 bool vrFp = vr_first_person_active();
                 if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
+                else if (vrFp && !gFirstPersonCamera.enabled) { set_first_person_enabled(true); }
             }
             // D-pad up cycles the VR mode, same as F10. gPlayer1Controller only carries fresh input
             // during gameplay (a menu routes input elsewhere), and we also skip it while a panel is open,

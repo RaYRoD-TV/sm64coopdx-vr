@@ -29,13 +29,24 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..b19a44063
+index 000000000..0416c1907
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,188 @@
 +# Changelog
 +
 +## Unreleased
++
++Multiplayer
++- Joining or leaving a lobby no longer breaks the First-person view mode. The
++  network reset that runs between sessions turned the first-person camera off
++  while the headset stayed in the First-person preset (the world rendered from
++  the wrong camera until you cycled modes) and quietly switched the FP Flip
++  Cam and FP Ease-Back toggles back to their defaults. VR's view mode and
++  toggles now survive the reset, and the first-person camera re-asserts itself
++  if anything else turns it off mid-session. Nothing else in the VR build
++  touches the network layer - the protocol and version match stock v1.5.1, so
++  public lobbies work as before.
 +
 +First person
 +- Talking to characters no longer freezes the game in first person. Toads,
@@ -3309,8 +3320,50 @@ index eb4a98956..bcb5d7db0 100644
  }
  
  s32 hud_get_value(enum HudDisplayValue type) {
+diff --git a/src/pc/network/network.c b/src/pc/network/network.c
+index dad36716a..6a3676b0a 100644
+--- a/src/pc/network/network.c
++++ b/src/pc/network/network.c
+@@ -33,6 +33,7 @@
+ #include "menu/intro_geo.h"
+ #include "game/ingame_menu.h"
+ #include "game/first_person_cam.h"
++#include "pc/vr/vr.h" // vr_is_active / vr_first_person_active - keep VR's first-person state across network resets
+ #include "game/envfx_snow.h"
+ #include "game/mario.h"
+ #include "engine/math_util.h"
+@@ -766,6 +767,17 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
+     cnt->extStickX = 0;
+     cnt->extStickY = 0;
+ 
++    // VR owns the first-person view mode and its toggles (FP Flip Cam / FP Ease-Back), and they are
++    // meant to survive across sessions - but the stock reset below wipes them. Without putting them
++    // back, leaving a game and then joining a lobby with the headset in the First-person preset broke
++    // the view (the preset stayed on while the game camera dropped to third person) and quietly turned
++    // the flip cam off. Snapshot what VR owns and restore it after the wipe; flatscreen keeps the
++    // stock full reset.
++    bool vrActive = vr_is_active();
++    bool vrKeepFp = vrActive && vr_first_person_active();
++    bool vrFlipCam = first_person_get_flip_cam();
++    bool vrInteractCam = first_person_get_interact_cam();
++
+     gFirstPersonCamera.enabled = false;
+     gFirstPersonCamera.forcePitch = false;
+     gFirstPersonCamera.forceYaw = false;
+@@ -774,6 +786,11 @@ void network_shutdown(bool sendLeaving, bool exiting, bool popup, bool reconnect
+     gFirstPersonCamera.fov = FIRST_PERSON_DEFAULT_FOV;
+     vec3f_set(gFirstPersonCamera.offset, 0, 0, 0);
+     first_person_reset();
++    if (vrActive) {
++        first_person_set_flip_cam(vrFlipCam);
++        first_person_set_interact_cam(vrInteractCam);
++        if (vrKeepFp) { gFirstPersonCamera.enabled = true; }
++    }
+ 
+     le_shutdown();
+ 
 diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
-index 0d4f9f7fb..1218507e7 100644
+index 0d4f9f7fb..9a43a0aaa 100644
 --- a/src/pc/pc_main.c
 +++ b/src/pc/pc_main.c
 @@ -21,6 +21,7 @@
@@ -3321,12 +3374,13 @@ index 0d4f9f7fb..1218507e7 100644
  #include "configfile.h"
  #include "thread.h"
  #include "controller/controller_api.h"
-@@ -32,6 +33,14 @@
+@@ -32,6 +33,15 @@
  #include "game/game_init.h"
  #include "game/main.h"
  #include "game/rumble_init.h"
 +#include "game/level_update.h"  // sCurrPlayMode, PLAY_MODE_*, gCurrCreditsEntry, gVrInActSelector
 +#include "game/ingame_menu.h"   // gMenuMode, get_dialog_id
++#include "game/first_person_cam.h" // gFirstPersonCamera / set_first_person_enabled - VR first-person lockstep
 +#include "game/area.h"          // gWarpTransition.isActive - door/level transition active
 +#include "dialog_ids.h"         // DIALOG_NONE
 +#include "game/camera.h"               // gCamera (->mtx is the renderer's world->camera matrix)
@@ -3336,7 +3390,7 @@ index 0d4f9f7fb..1218507e7 100644
  
  #include "pc/lua/utils/smlua_audio_utils.h"
  
-@@ -109,6 +118,9 @@ struct GfxWindowManagerAPI* gWindowApi = &gfx_dummy_wm_api;
+@@ -109,6 +119,9 @@ struct GfxWindowManagerAPI* gWindowApi = &gfx_dummy_wm_api;
  struct GfxRenderingAPI* gRenderApi = &gfx_dummy_renderer_api;
  
  extern void gfx_run(Gfx *commands);
@@ -3346,7 +3400,7 @@ index 0d4f9f7fb..1218507e7 100644
  extern void thread5_game_loop(void *arg);
  extern void create_next_audio_buffer(s16 *samples, u32 num_samples);
  void game_loop_one_iteration(void);
-@@ -231,6 +243,9 @@ static void select_graphics_backend(void) {
+@@ -231,6 +244,9 @@ static void select_graphics_backend(void) {
      if (gCLIOpts.backend != -1) { backend = gCLIOpts.backend; }
  #endif
  
@@ -3356,7 +3410,7 @@ index 0d4f9f7fb..1218507e7 100644
      switch (backend) {
          case GAPI_GL:
              gWindowApi = &gfx_sdl;
-@@ -256,6 +271,141 @@ static void select_graphics_backend(void) {
+@@ -256,6 +272,141 @@ static void select_graphics_backend(void) {
      }
  }
  
@@ -3498,7 +3552,7 @@ index 0d4f9f7fb..1218507e7 100644
  void produce_interpolation_frames_and_delay(void) {
      u32 refreshRate = get_target_refresh_rate();
  
-@@ -268,6 +418,15 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -268,6 +419,15 @@ void produce_interpolation_frames_and_delay(void) {
          refreshRate = displayRefreshRate;
      }
  
@@ -3514,7 +3568,7 @@ index 0d4f9f7fb..1218507e7 100644
      f64 targetTime = sFrameTimeStart + sFrameTime;
      s32 numFramesToDraw = get_num_frames_to_draw(sFrameTimeStart, refreshRate);
  
-@@ -290,10 +449,98 @@ void produce_interpolation_frames_and_delay(void) {
+@@ -290,10 +450,102 @@ void produce_interpolation_frames_and_delay(void) {
          gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
          gRenderingDelta = delta;
  
@@ -3526,13 +3580,17 @@ index 0d4f9f7fb..1218507e7 100644
 +        if (vr_is_active()) {
 +            Gfx *vrDl = (Gfx *) gGfxSPTask->task.t.data_ptr;
 +            // EXPERIMENTAL first-person: when the VR toggle (F11) is on, turn on coopdx's first-person
-+            // camera so the game renders from Mario's head. Only act on change so we don't fight the
-+            // game's own first-person handling every frame.
++            // camera so the game renders from Mario's head. Act on preset change as before, BUT also
++            // re-assert every frame while the First-person preset is on: a network reset (leaving or
++            // joining a lobby) and Lua mods can clear the game-side flag without the preset changing,
++            // which used to leave the view broken until you cycled modes. Mismatch-only re-assert, so
++            // the ease-back state is never disturbed otherwise. The disable direction stays on-change
++            // only, so Theater/diorama players can still use the game's own first-person if they want.
 +            {
-+                extern void set_first_person_enabled(bool enable); // game/first_person_cam.h
 +                static bool sVrFpPrev = false;
 +                bool vrFp = vr_first_person_active();
 +                if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
++                else if (vrFp && !gFirstPersonCamera.enabled) { set_first_person_enabled(true); }
 +            }
 +            // D-pad up cycles the VR mode, same as F10. gPlayer1Controller only carries fresh input
 +            // during gameplay (a menu routes input elsewhere), and we also skip it while a panel is open,
@@ -3613,7 +3671,7 @@ index 0d4f9f7fb..1218507e7 100644
          gfx_display_frame();
  
          // delay if our framerate is capped
-@@ -452,6 +699,7 @@ void game_deinit(void) {
+@@ -452,6 +704,7 @@ void game_deinit(void) {
      if (gGameInited) { configfile_save(configfile_name()); }
      controller_shutdown();
      audio_shutdown();
@@ -3621,7 +3679,7 @@ index 0d4f9f7fb..1218507e7 100644
      network_shutdown(true, true, false, false);
      smlua_text_utils_shutdown();
      smlua_shutdown();
-@@ -504,6 +752,15 @@ int main(int argc, char *argv[]) {
+@@ -504,6 +757,15 @@ int main(int argc, char *argv[]) {
      // handle terminal arguments
      if (!parse_cli_opts(argc, argv)) { return 0; }
  
@@ -3637,7 +3695,7 @@ index 0d4f9f7fb..1218507e7 100644
  #ifdef _WIN32
      // handle Windows console
      if (gCLIOpts.console || gCLIOpts.headless) {
-@@ -528,6 +785,12 @@ int main(int argc, char *argv[]) {
+@@ -528,6 +790,12 @@ int main(int argc, char *argv[]) {
  
      configfile_load();
  
