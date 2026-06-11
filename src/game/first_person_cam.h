@@ -20,10 +20,11 @@
 // Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
 // head-first lunge and settles by the time the slide starts.
 #define FIRST_PERSON_DIVE_PITCH 0x1800
-// Peak melee lean (~7 deg). Punches lean the view in with the hit and the kicks lean back behind the
+// Peak melee lean (~3.5 deg). Punches lean the view in with the hit and the kicks lean back behind the
 // extended leg; the lean is low-passed across the combo so mashing reads as one continuous subtle lean,
-// not a rock. Kept SMALL on purpose - melee fires constantly, and anything bigger reads as jarring fast.
-#define FIRST_PERSON_MELEE_PITCH 0x0500
+// not a rock. Kept TINY on purpose - melee fires constantly, this should read as a weight shift you
+// barely notice, never as head motion.
+#define FIRST_PERSON_MELEE_PITCH 0x0280
 // Peak death tip (~56 deg). Dying eases the view over with the death animation and HOLDS it there -
 // backward for the classic standing death, forward for dying on the stomach - until the death warp.
 #define FIRST_PERSON_DEATH_PITCH 0x2800

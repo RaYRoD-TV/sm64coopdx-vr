@@ -547,7 +547,7 @@ s16 first_person_flip_roll(struct MarioState *m) {
     // as one continuous, subtle lean that eases away after the last hit.
     static f32 sStrikeLean = 0.0f;
     for (u32 i = 0; i < frameDelta; i++) {
-        sStrikeLean += (strikeTarget - sStrikeLean) * 0.25f;
+        sStrikeLean += (strikeTarget - sStrikeLean) * 0.20f;
     }
     if (strikeTarget == 0.0f && sStrikeLean > -16.0f && sStrikeLean < 16.0f) { sStrikeLean = 0.0f; }
     actionAngle = (s16)((f32)actionAngle + sStrikeLean);

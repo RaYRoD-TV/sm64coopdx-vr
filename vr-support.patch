@@ -29,7 +29,7 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..652dec730
+index 000000000..403733628
 --- /dev/null
 +++ b/CHANGELOG.md
 @@ -0,0 +1,203 @@
@@ -89,11 +89,11 @@ index 000000000..652dec730
 +  the camera shake that could fire in the last moments before the fade are
 +  gone, and the fall-out look-up rides through that touchdown instead of
 +  tipping back down mid-fade.
-+- The melee lean is now genuinely subtle: about 7 degrees at its peak, and the
++- The melee lean is now genuinely subtle: under 4 degrees at its peak, and the
 +  lean is smoothed across the whole combo - each hit used to restart its own
 +  lean curve, which stepped the view partway back between hits and read as
-+  rocking when mashing B. Now a combo reads as one continuous gentle lean that
-+  eases away after the last hit.
++  rocking when mashing B. Now a combo reads as one continuous gentle weight
++  shift that eases away after the last hit.
 +- The camera stick (right stick) got a proper response curve: fine and
 +  comfortable near the center, ramping smoothly to FULL turn speed at full
 +  deflection. The old flat scale capped the top speed at about half of what
@@ -1022,7 +1022,7 @@ index 5406e94eb..ea0c75e5c 100644
              // This could cause softlocks. If a message starts one frame after another one closes, the
              // cutscene will never end.
 diff --git a/src/game/first_person_cam.c b/src/game/first_person_cam.c
-index 4bfed22b7..0aad6a453 100644
+index 4bfed22b7..81839209b 100644
 --- a/src/game/first_person_cam.c
 +++ b/src/game/first_person_cam.c
 @@ -9,12 +9,14 @@
@@ -1519,7 +1519,7 @@ index 4bfed22b7..0aad6a453 100644
 +    // as one continuous, subtle lean that eases away after the last hit.
 +    static f32 sStrikeLean = 0.0f;
 +    for (u32 i = 0; i < frameDelta; i++) {
-+        sStrikeLean += (strikeTarget - sStrikeLean) * 0.25f;
++        sStrikeLean += (strikeTarget - sStrikeLean) * 0.20f;
 +    }
 +    if (strikeTarget == 0.0f && sStrikeLean > -16.0f && sStrikeLean < 16.0f) { sStrikeLean = 0.0f; }
 +    actionAngle = (s16)((f32)actionAngle + sStrikeLean);
@@ -1552,10 +1552,10 @@ index 4bfed22b7..0aad6a453 100644
 +    return m->action == ACT_PUNCHING && m->actionArg == 9; // crouch sweep kick: a low roll with the legs
 +}
 diff --git a/src/game/first_person_cam.h b/src/game/first_person_cam.h
-index 42bfeaf8f..8f738ece0 100644
+index 42bfeaf8f..122281777 100644
 --- a/src/game/first_person_cam.h
 +++ b/src/game/first_person_cam.h
-@@ -7,6 +7,36 @@
+@@ -7,6 +7,37 @@
  
  #define FIRST_PERSON_MARIO_HEAD_POS 120
  #define FIRST_PERSON_MARIO_HEAD_POS_SHORT 60
@@ -1572,10 +1572,11 @@ index 42bfeaf8f..8f738ece0 100644
 +// Peak dive lunge lean (~34 deg). The dive (and half of it for the long jump) leans the view into the
 +// head-first lunge and settles by the time the slide starts.
 +#define FIRST_PERSON_DIVE_PITCH 0x1800
-+// Peak melee lean (~7 deg). Punches lean the view in with the hit and the kicks lean back behind the
++// Peak melee lean (~3.5 deg). Punches lean the view in with the hit and the kicks lean back behind the
 +// extended leg; the lean is low-passed across the combo so mashing reads as one continuous subtle lean,
-+// not a rock. Kept SMALL on purpose - melee fires constantly, and anything bigger reads as jarring fast.
-+#define FIRST_PERSON_MELEE_PITCH 0x0500
++// not a rock. Kept TINY on purpose - melee fires constantly, this should read as a weight shift you
++// barely notice, never as head motion.
++#define FIRST_PERSON_MELEE_PITCH 0x0280
 +// Peak death tip (~56 deg). Dying eases the view over with the death animation and HOLDS it there -
 +// backward for the classic standing death, forward for dying on the stomach - until the death warp.
 +#define FIRST_PERSON_DEATH_PITCH 0x2800
@@ -1592,7 +1593,7 @@ index 42bfeaf8f..8f738ece0 100644
  
  struct FirstPersonCamera {
      bool enabled;
-@@ -14,6 +44,9 @@ struct FirstPersonCamera {
+@@ -14,6 +45,9 @@ struct FirstPersonCamera {
      bool forceYaw;
      bool forceRoll;
      bool centerL;
@@ -1602,7 +1603,7 @@ index 42bfeaf8f..8f738ece0 100644
      s16 pitch;
      s16 yaw;
      f32 crouch;
-@@ -35,4 +68,22 @@ void first_person_update(void);
+@@ -35,4 +69,22 @@ void first_person_update(void);
  /* |description|Resets first person|descriptionEnd| */
  void first_person_reset(void);
  

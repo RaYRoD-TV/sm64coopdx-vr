@@ -54,11 +54,11 @@ First person
   the camera shake that could fire in the last moments before the fade are
   gone, and the fall-out look-up rides through that touchdown instead of
   tipping back down mid-fade.
-- The melee lean is now genuinely subtle: about 7 degrees at its peak, and the
+- The melee lean is now genuinely subtle: under 4 degrees at its peak, and the
   lean is smoothed across the whole combo - each hit used to restart its own
   lean curve, which stepped the view partway back between hits and read as
-  rocking when mashing B. Now a combo reads as one continuous gentle lean that
-  eases away after the last hit.
+  rocking when mashing B. Now a combo reads as one continuous gentle weight
+  shift that eases away after the last hit.
 - The camera stick (right stick) got a proper response curve: fine and
   comfortable near the center, ramping smoothly to FULL turn speed at full
   deflection. The old flat scale capped the top speed at about half of what
