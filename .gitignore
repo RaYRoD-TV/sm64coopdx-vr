@@ -52,6 +52,10 @@
 # General project-specific ignores
 doxygen/doxygen/*
 build/*
+# VR build outputs and local-only files (never publish these)
+dist/
+*.rar
+VR_PROGRESS_AND_PLAN.md
 *.dump
 *.mio0
 *.z64

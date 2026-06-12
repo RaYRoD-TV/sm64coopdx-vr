@@ -447,6 +447,10 @@ s32 lvl_init_act_selector_values_and_stars(UNUSED s32 arg, UNUSED s32 unused) {
         sObtainedStars--;
     }
 
+    // VR: mark the act/course/star selector live so the flat-panel predicate routes this
+    // hybrid screen (perspective fill + rotating star models + 2D text) to the head-locked panel.
+    gVrInActSelector = true;
+
     //! no return value
 #ifdef AVOID_UB
     return 0;
@@ -504,4 +508,8 @@ void star_select_finish_selection(void) {
     }
     gDialogCourseActNum = sSelectedActIndex + 1;
     gCurrActStarNum = gDialogCourseActNum;
+
+    // VR: an act has been chosen - the selector is closing and a real level is about to load.
+    // Clear the flat-panel flag so the next frame can fall back to the diorama once gameplay starts.
+    gVrInActSelector = false;
 }

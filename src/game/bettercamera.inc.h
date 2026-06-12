@@ -106,6 +106,14 @@ inline static s32 newcam_ivrt(u8 axis) {
     );
 }
 
+// True only in a live VR session that is NOT first-person (diorama / close-up). There we want the
+// snappy direct stick-to-yaw response that first-person uses, instead of bettercamera's acceleration
+// smoothing (momentum/lag tuned for flat third-person, which feels wrong in a headset). vr_is_active()
+// and vr_first_person_active() both return false in flat / non-VR builds, so flat play is untouched.
+static inline bool newcam_vr_diorama(void) {
+    return vr_is_active() && !vr_first_person_active();
+}
+
 // This is called at every level initialisation.
 static void newcam_init(struct Camera *c, u8 isSoftReset) {
     gNewCamera.tilt = 1500;
@@ -243,14 +251,26 @@ static void newcam_rotate_button(void) {
     else {
 
         // Yaw
-        if (ABS(gNewCamera.extStick[0]) > 20) {
+        if (newcam_vr_diorama()) {
+            // VR diorama/close-up: direct stick-to-yaw (mirrors the integration at the yaw -= ... line),
+            // no acceleration ramp/glide, so looking around feels as snappy as first-person.
+            gNewCamera.yawAccel = 0;
+            if (ABS(gNewCamera.extStick[0]) > 20) {
+                gNewCamera.yaw -= newcam_ivrt(0) * gNewCamera.extStick[0] * 0.125f * (gNewCamera.sensitivityX / 10.f);
+            }
+        } else if (ABS(gNewCamera.extStick[0]) > 20) {
             gNewCamera.yawAccel = newcam_adjust_value(gNewCamera.yawAccel, gNewCamera.extStick[0] * 0.125f, gNewCamera.extStick[0] * 1.25f);
         } else {
             gNewCamera.yawAccel -= (gNewCamera.yawAccel * (gNewCamera.deceleration / 100));
         }
 
         // Tilt
-        if (ABS(gNewCamera.extStick[1]) > 20) {
+        if (newcam_vr_diorama()) {
+            gNewCamera.tiltAccel = 0;
+            if (ABS(gNewCamera.extStick[1]) > 20) {
+                gNewCamera.tilt = newcam_clamp(gNewCamera.tilt + newcam_ivrt(1) * gNewCamera.extStick[1] * 0.125f * (gNewCamera.sensitivityY / 10.f), -NEWCAM_TILT_LIMIT, +NEWCAM_TILT_LIMIT);
+            }
+        } else if (ABS(gNewCamera.extStick[1]) > 20) {
             gNewCamera.tiltAccel = newcam_adjust_value(gNewCamera.tiltAccel, gNewCamera.extStick[1] * 0.125f, gNewCamera.extStick[1] * 1.25f);
         } else {
             gNewCamera.tiltAccel -= (gNewCamera.tiltAccel* (gNewCamera.deceleration / 100));
@@ -412,6 +432,9 @@ static void newcam_update_values(void) {
 }
 
 static void newcam_collision(void) {
+    // VR diorama (tabletop) uses its own SMOOTH distance clamp in newcam_set_values instead - this routine
+    // HARD-SNAPS the camera onto walls, which reads as the view bouncing when orbiting. Skip it there.
+    if (newcam_vr_diorama()) { return; }
 
     // check if we can see player
     Vec3f up = { 0, 1, 0 };
@@ -574,6 +597,45 @@ static void newcam_position_cam(void) {
     newcam_level_bounds();
     if (gNewCamera.hasCollision) {
         newcam_collision();
+    }
+    // VR diorama (tabletop): the SOLE wall collision for the free orbit (newcam_collision is skipped above,
+    // and the world-nudge anti-clip is skipped here too - see vr_anticlip_get_head_campos). Ray-cast from
+    // Mario toward the camera; if a wall is between them, cap the camera distance just in front of it.
+    // Ease IN at a wall (so it doesn't snap at your face); follow straight back OUT when clear (no slow
+    // slide). The orbit DIRECTION stays instant. Flat play is untouched (newcam_vr_diorama() is false there).
+    if (newcam_vr_diorama()) {
+        f32 cdx = gNewCamera.pos[0] - gNewCamera.lookAt[0];
+        f32 cdy = gNewCamera.pos[1] - gNewCamera.lookAt[1];
+        f32 cdz = gNewCamera.pos[2] - gNewCamera.lookAt[2];
+        f32 freeDist = sqrtf(cdx*cdx + cdy*cdy + cdz*cdz);
+        if (freeDist > 1.0f) {
+            f32 maxDist = freeDist;
+            struct Surface *surf = NULL;
+            Vec3f hit;
+            Vec3f ray = { cdx, cdy, cdz };
+            find_surface_on_ray(gNewCamera.lookAt, ray, &surf, hit, 3.f);
+            // WALLS ONLY: a vertical surface has |normal.y| near 0; floors/ceilings near 1. Ignore floors and
+            // ceilings so tilting the view up or down doesn't suddenly yank the camera in toward the model.
+            f32 ny = (surf != NULL) ? surf->normal.y : 0.0f; if (ny < 0.0f) { ny = -ny; }
+            if (surf != NULL && ny < 0.5f) {
+                f32 hx = hit[0] - gNewCamera.lookAt[0];
+                f32 hy = hit[1] - gNewCamera.lookAt[1];
+                f32 hz = hit[2] - gNewCamera.lookAt[2];
+                f32 hitDist = sqrtf(hx*hx + hy*hy + hz*hz) - 50.0f; // keep the camera 50u in front of the wall
+                if (hitDist < maxDist) { maxDist = hitDist; }
+                if (maxDist < 60.0f)   { maxDist = 60.0f; }         // never pull the camera inside Mario
+            }
+            static f32 sVrCamDist = -1.0f;
+            if (sVrCamDist < 0.0f || maxDist >= sVrCamDist) {
+                sVrCamDist = maxDist;                               // first frame, or clear / moving out - follow directly
+            } else {
+                sVrCamDist += (maxDist - sVrCamDist) * 0.35f;       // pulling IN at a wall - smooth, no snap
+            }
+            f32 s = sVrCamDist / freeDist;
+            gNewCamera.pos[0] = gNewCamera.lookAt[0] + cdx * s;
+            gNewCamera.pos[1] = gNewCamera.lookAt[1] + cdy * s;
+            gNewCamera.pos[2] = gNewCamera.lookAt[2] + cdz * s;
+        }
     }
 }
 

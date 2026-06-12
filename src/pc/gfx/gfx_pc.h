@@ -40,6 +40,8 @@ void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, co
 struct GfxRenderingAPI *gfx_get_current_rendering_api(void);
 void gfx_start_frame(void);
 void gfx_run(Gfx *commands);
+void gfx_run_dl_vr_eye(Gfx *commands, const float eyeViewProj[16], const float skyViewProj[16], int eyeW, int eyeH); // VR: render one eye
+void gfx_run_dl_vr_overlay(Gfx *commands, int w, int h, bool sky); // VR: render 2D overlay (sky or HUD)
 void gfx_end_frame_render(void);
 void gfx_display_frame(void);
 void gfx_end_frame(void);

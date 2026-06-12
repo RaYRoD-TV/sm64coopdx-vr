@@ -21,6 +21,7 @@
 #include "pc_main.h"
 #include "loading.h"
 #include "cliopts.h"
+#include "vr/vr.h"
 #include "configfile.h"
 #include "thread.h"
 #include "controller/controller_api.h"
@@ -32,6 +33,15 @@
 #include "game/game_init.h"
 #include "game/main.h"
 #include "game/rumble_init.h"
+#include "game/level_update.h"  // sCurrPlayMode, PLAY_MODE_*, gCurrCreditsEntry, gVrInActSelector
+#include "game/ingame_menu.h"   // gMenuMode, get_dialog_id
+#include "game/first_person_cam.h" // gFirstPersonCamera / set_first_person_enabled - VR first-person lockstep
+#include "game/area.h"          // gWarpTransition.isActive - door/level transition active
+#include "dialog_ids.h"         // DIALOG_NONE
+#include "game/camera.h"               // gCamera (->mtx is the renderer's world->camera matrix)
+#include "engine/surface_collision.h"  // find_floor / find_ceil / find_wall_collisions
+#include "engine/math_util.h"          // Mat4, mtxf_inverse_non_affine
+#include "game/object_list_processor.h" // gCheckingSurfaceCollisionsForCamera
 
 #include "pc/lua/utils/smlua_audio_utils.h"
 
@@ -109,6 +119,9 @@ struct GfxWindowManagerAPI* gWindowApi = &gfx_dummy_wm_api;
 struct GfxRenderingAPI* gRenderApi = &gfx_dummy_renderer_api;
 
 extern void gfx_run(Gfx *commands);
+extern void gfx_run_dl_vr_eye(Gfx *commands, const float eyeViewProj[16], const float skyViewProj[16], int eyeW, int eyeH);
+extern void gfx_run_dl_vr_overlay(Gfx *commands, int w, int h, bool sky);
+extern void gfx_run_dl_vr_panel(Gfx *commands, int w, int h);
 extern void thread5_game_loop(void *arg);
 extern void create_next_audio_buffer(s16 *samples, u32 num_samples);
 void game_loop_one_iteration(void);
@@ -231,6 +244,9 @@ static void select_graphics_backend(void) {
     if (gCLIOpts.backend != -1) { backend = gCLIOpts.backend; }
 #endif
 
+    // OpenXR is bound to the GL context, so VR requires the GL backend.
+    if (gCLIOpts.vr) { backend = GAPI_GL; }
+
     switch (backend) {
         case GAPI_GL:
             gWindowApi = &gfx_sdl;
@@ -256,6 +272,141 @@ static void select_graphics_backend(void) {
     }
 }
 
+// VR: is this frame a NON-GAMEPLAY screen (menu / UI), so it should be rendered as a flat frame
+// on one opaque head-locked panel instead of the stereo diorama? Keyed on the game's own state
+// machine (not on whether 3D happened to draw), so it's robust for hybrid screens like the
+// act/course/star selector that render perspective + 3D models behind 2D text.
+//   TRUE  -> flat-frame-on-panel (title, main menu, file/save select, act/star select, dialog,
+//            pause + course-grid + course-complete, credits, attract-mode demo)
+//   FALSE -> active gameplay: keep the existing diorama + sky dome + HUD path (unchanged)
+static bool vr_frame_is_nongameplay(void) {
+    extern bool gDjuiInMainMenu;        // pc/djui/djui.h
+    extern bool djui_panel_is_active(void); // pc/djui/djui_panel.h - any DJUI panel open (player, dynos, pause, options)
+    extern bool djui_panel_is_vr_panel(void);
+    extern bool vr_is_theater_mode(void);
+    // Theater mode plays the whole flat game (and its menus) on the big world-locked screen, so always use
+    // the panel path while it's active.
+    if (vr_is_theater_mode())              return true;
+    // The VR settings menu stays in the stereo diorama (menu floats as a head-locked overlay) so you can see
+    // diorama slider changes live - overrides the pause/panel checks below, which would force the flat panel.
+    if (djui_panel_is_vr_panel())          return false;
+    // A door / level transition (the fade / circle / star wipe) is a 2D fullscreen effect. In the stereo
+    // path it lands in the small head-locked HUD overlay and only covers part of the view, so for its
+    // duration render the flat panel instead, which makes the transition fill the whole view.
+    if (gWarpTransition.isActive)          return true;
+    if (gDjuiInMainMenu)                   return true; // title / main menu / connect / options (3D backdrop)
+    if (djui_panel_is_active())            return true; // in-game menus: Player, DynOS, pause, options, etc.
+    if (gVrInActSelector)                  return true; // act/course/star select (the hybrid that broke)
+    if (gCurrCreditsEntry != NULL)         return true; // credits / ending
+    if (gCurrDemoInput != NULL)            return true; // attract-mode demo
+    // NOTE: dialog boxes (talking to characters, reading signs) intentionally stay in the stereo VR
+    // view - the world keeps rendering in 3D and the text box shows as the head-locked HUD overlay, so
+    // a conversation no longer yanks you out to the flat panel. (was: get_dialog_id() != DIALOG_NONE)
+    if (gMenuMode != -1)                   return true; // pause star-grid / course-complete (2D fullscreen)
+    if (sCurrPlayMode == PLAY_MODE_PAUSED) return true; // pause (frozen world -> flat panel for consistency)
+    return false;                                       // active gameplay
+}
+
+// VR geometry anti-clip (diorama / close-up only). vr.c hands us the cyclopean eye position in
+// game-camera space; we convert it to world via the renderer's camera matrix, run level collision,
+// and hand back an anchor offset (meters) that nudges the whole shrunk world off any wall/floor/
+// ceiling the eye pokes into. First-person is excluded by vr_anticlip_get_head_campos() returning
+// false there (moving the eye off the head causes sickness). One-frame latency: the offset we set is
+// applied on the next vr_begin_frame(); the correction is clamped + eased so the world never lurches.
+static void vr_anticlip_resolve(void) {
+    static float applied[3] = { 0.0f, 0.0f, 0.0f };
+    float target[3] = { 0.0f, 0.0f, 0.0f };
+    float camPos[3];
+    bool active = vr_anticlip_get_head_campos(camPos) && (gCamera != NULL);
+
+    // diagnostics (rate-limited)
+    float wx = 0, wy = 0, wz = 0, fY = 0, cY = 0, dwx = 0, dwy = 0, dwz = 0;
+    bool haveFloor = false, haveCeil = false;
+
+    if (active) {
+        Mat4 inv;
+        if (mtxf_inverse_non_affine(inv, gCamera->mtx)) {
+            // camera-space (row vector) -> world: world = camPos * inv(gCamera->mtx)
+            wx = camPos[0]*inv[0][0] + camPos[1]*inv[1][0] + camPos[2]*inv[2][0] + inv[3][0];
+            wy = camPos[0]*inv[0][1] + camPos[1]*inv[1][1] + camPos[2]*inv[2][1] + inv[3][1];
+            wz = camPos[0]*inv[0][2] + camPos[1]*inv[1][2] + camPos[2]*inv[2][2] + inv[3][2];
+            // s16 cast guard inside find_floor
+            if (wx < -30000.0f) wx = -30000.0f; else if (wx > 30000.0f) wx = 30000.0f;
+            if (wz < -30000.0f) wz = -30000.0f; else if (wz > 30000.0f) wz = 30000.0f;
+
+            float scale    = vr_get_diorama_scale();
+            float marginWU = 0.10f * scale; // 10 cm physical standoff in world units
+
+            float cwx = wx, cwy = wy, cwz = wz;
+            gCheckingSurfaceCollisionsForCamera = TRUE;
+
+            struct Surface *floor = NULL, *ceil = NULL;
+            fY = find_floor(cwx, cwy, cwz, &floor);
+            cY = find_ceil (cwx, cwy, cwz, &ceil);
+            haveFloor = (floor != NULL) && (fY > -10000.0f);
+            haveCeil  = (ceil  != NULL) && (cY <  19000.0f);
+            if (haveFloor && cwy < fY + marginWU) cwy = fY + marginWU;
+            if (haveCeil  && cwy > cY - marginWU) cwy = cY - marginWU;
+            if (haveFloor && haveCeil && fY + marginWU > cY - marginWU) cwy = 0.5f * (fY + cY);
+
+            struct WallCollisionData wcd;
+            memset(&wcd, 0, sizeof(wcd));
+            wcd.x = cwx; wcd.y = cwy; wcd.z = cwz; wcd.offsetY = 0.0f; wcd.radius = marginWU;
+            find_wall_collisions(&wcd);
+            cwx = wcd.x; cwz = wcd.z;
+
+            // a wall push may have slid us over a step - re-clamp the floor once
+            fY = find_floor(cwx, cwy, cwz, &floor);
+            if (floor != NULL && fY > -10000.0f && cwy < fY + marginWU) cwy = fY + marginWU;
+
+            gCheckingSurfaceCollisionsForCamera = FALSE;
+
+            dwx = cwx - wx; dwy = cwy - wy; dwz = cwz - wz;
+
+            // world delta -> camera-space delta (rotation rows only), then -> LOCAL meters, negated
+            // (move the world opposite to the eye-pushout so the fixed head ends up outside geometry).
+            float dcx = dwx*gCamera->mtx[0][0] + dwy*gCamera->mtx[1][0] + dwz*gCamera->mtx[2][0];
+            float dcy = dwx*gCamera->mtx[0][1] + dwy*gCamera->mtx[1][1] + dwz*gCamera->mtx[2][1];
+            float dcz = dwx*gCamera->mtx[0][2] + dwy*gCamera->mtx[1][2] + dwz*gCamera->mtx[2][2];
+            float invScale = 1.0f / scale;
+            target[0] = -dcx * invScale;
+            target[1] = -dcy * invScale;
+            target[2] = -dcz * invScale;
+        } else {
+            active = false;
+        }
+    }
+
+    // Ease toward the target (zero when inactive). Clamp per-frame change so the world drifts gently,
+    // and hard-bound the total so a bad read can never throw the world far.
+    for (int i = 0; i < 3; i++) {
+        float d = target[i] - applied[i];
+        // Escape geometry FAST so a quick camera move (close-up swinging low, a jump) can't dip the view
+        // through a floor before the correction catches up; relax back to neutral slowly so the world never
+        // lurches. "Escaping" = the correction is growing in magnitude (pushing the eye further out).
+        float at = (target[i]  < 0.0f) ? -target[i]  : target[i];
+        float aa = (applied[i] < 0.0f) ? -applied[i] : applied[i];
+        bool escaping = (at > aa);
+        float maxStep = !active ? 0.04f : (escaping ? 0.10f : 0.02f);
+        if (d >  maxStep) d =  maxStep;
+        if (d < -maxStep) d = -maxStep;
+        applied[i] += d;
+        if (applied[i] >  0.80f) applied[i] =  0.80f; // a bit more headroom for deep floor dips in close-up
+        if (applied[i] < -0.80f) applied[i] = -0.80f;
+    }
+    vr_anticlip_set_offset(applied);
+
+    if (active) {
+        static int dbg = 0;
+        if ((dbg++ % 30) == 0) {
+            printf("[VRanticlip] eyeW=(%.0f,%.0f,%.0f) fY=%s cY=%s dW=(%.0f,%.0f,%.0f) offM=(%.3f,%.3f,%.3f)\n",
+                wx, wy, wz,
+                haveFloor ? "y" : "-", haveCeil ? "y" : "-",
+                dwx, dwy, dwz, applied[0], applied[1], applied[2]);
+        }
+    }
+}
+
 void produce_interpolation_frames_and_delay(void) {
     u32 refreshRate = get_target_refresh_rate();
 
@@ -266,6 +417,15 @@ void produce_interpolation_frames_and_delay(void) {
     if (configWindow.vsync && displayRefreshRate <= refreshRate) {
         shouldDelay = false;
         refreshRate = displayRefreshRate;
+    }
+
+    // VR: xrWaitFrame inside vr_begin_frame() is the authoritative pacer. Size the interpolation count
+    // from the headset's real refresh so we emit one rendered frame per headset frame, and drop coopdx's
+    // monitor-locked delay so it can't fight the headset's pacing - that fight is what shows up as judder.
+    if (vr_is_active()) {
+        int hz = vr_get_refresh_rate();
+        if (hz >= 30 && hz <= 1000) { refreshRate = (u32)hz; }
+        shouldDelay = false;
     }
 
     f64 targetTime = sFrameTimeStart + sFrameTime;
@@ -290,10 +450,102 @@ void produce_interpolation_frames_and_delay(void) {
         gFramePercentage = clamp((curTime - sFrameTimeStart) / sFrameTime, 0.f, 1.f);
         gRenderingDelta = delta;
 
+        vr_begin_frame();
         gfx_start_frame();
         if (!gSkipInterpolationTitleScreen) { patch_interpolations(delta); }
         send_display_list(gGfxSPTask);
         gfx_end_frame_render();
+        if (vr_is_active()) {
+            Gfx *vrDl = (Gfx *) gGfxSPTask->task.t.data_ptr;
+            // EXPERIMENTAL first-person: when the VR toggle (F11) is on, turn on coopdx's first-person
+            // camera so the game renders from Mario's head. Act on preset change as before, BUT also
+            // re-assert every frame while the First-person preset is on: a network reset (leaving or
+            // joining a lobby) and Lua mods can clear the game-side flag without the preset changing,
+            // which used to leave the view broken until you cycled modes. Mismatch-only re-assert, so
+            // the ease-back state is never disturbed otherwise. The disable direction stays on-change
+            // only, so Theater/diorama players can still use the game's own first-person if they want.
+            {
+                static bool sVrFpPrev = false;
+                bool vrFp = vr_first_person_active();
+                if (vrFp != sVrFpPrev) { set_first_person_enabled(vrFp); sVrFpPrev = vrFp; }
+                else if (vrFp && !gFirstPersonCamera.enabled) { set_first_person_enabled(true); }
+            }
+            // D-pad up cycles the VR mode, same as F10. gPlayer1Controller only carries fresh input
+            // during gameplay (a menu routes input elsewhere), and we also skip it while a panel is open,
+            // so it never fights menu navigation.
+            {
+                extern struct Controller *gPlayer1Controller; // game/game_init.h
+                extern bool djui_panel_is_active(void);        // pc/djui/djui_panel.h
+                // Edge-detect off buttonDown (held state) rather than buttonPressed: buttonPressed is true
+                // for a single game-logic frame and the VR loop can miss it, so the cycle dropped inputs.
+                static u16 sPrevDpadUp = 0;
+                u16 dpadUp = gPlayer1Controller ? (u16)(gPlayer1Controller->buttonDown & U_JPAD) : 0;
+                // Only while the headset is worn - with it off the diorama presets don't apply to the flat view.
+                if (dpadUp && !sPrevDpadUp && !djui_panel_is_active() && vr_is_focused()) { vr_cycle_preset(); }
+                sPrevDpadUp = dpadUp;
+            }
+            // First-person flip cam: feed Mario's synthetic flip roll into the eye view (vr.c rolls the
+            // eye + sky). Returns 0 unless the FP Flip Cam toggle is on and a flip is in progress.
+            {
+                extern f32 first_person_flip_roll_rad(void);                  // game/first_person_cam.h
+                extern bool first_person_flip_is_side(struct MarioState *m);  // side flip rolls; others pitch
+                vr_set_flip_roll(first_person_flip_roll_rad());
+                vr_set_flip_side(first_person_flip_is_side(&gMarioStates[0]));
+            }
+            // Tabletop: back out of the C-up look-around state so it can't freeze movement in the diorama.
+            { extern void first_person_exit_lookaround_for_tabletop(void); first_person_exit_lookaround_for_tabletop(); }
+            if (vr_frame_is_nongameplay()) {
+                // FLATSCREEN-ON-A-PANEL: render the WHOLE flat frame (2D + 3D, game projection,
+                // no diorama, no 2D/3D split) once into the panel swapchain and submit it as the
+                // sole large opaque head-locked quad. Every menu/UI screen looks like the desktop
+                // game, floating on a VR screen.
+                vr_set_panel_mode(true);
+                // Every menu is world-locked so you can turn your head to look around it. The crop is
+                // driven by how the screen is laid out: left-docked menus (Mods, lobbies, Player, DynOS)
+                // and any non-panel screen (act/star select, dialogs) use the full 16:9 frame so nothing
+                // is cut; centered panels (title, options, pause) use the 4:3 region so there's no void.
+                {
+                    extern bool djui_panel_active_is_left_docked(void); // pc/djui/djui_panel.h
+                    extern bool djui_panel_is_active(void);
+                    vr_set_panel_full_frame(djui_panel_active_is_left_docked() || !djui_panel_is_active());
+                }
+                if (vr_begin_panel()) {
+                    gfx_run_dl_vr_panel(vrDl, vr_overlay_width(), vr_overlay_height());
+                    vr_end_panel();
+                }
+                // Theater backdrop: mode 1 (Panoramic) renders the user panorama into the backdrop swapchain so
+                // vr_submit composites it behind the screen. Black (0) and Model (2) skip this -> plain black.
+                {
+                    extern bool vr_render_backdrop_pano(void);
+                    extern int  vr_get_theater_bg(void);
+                    if (vr_is_theater_mode() && vr_get_theater_bg() == 1) { vr_render_backdrop_pano(); }
+                }
+                vr_submit(); // panel (+ theater backdrop) layers
+            } else {
+                // ACTIVE GAMEPLAY: existing stereo diorama + world-locked sky dome + head-locked
+                // HUD overlay (unchanged).
+                // Geometry anti-clip: read this frame's eye + camera, run collision, set the anchor
+                // offset for the next frame so the eye can't poke through walls/floors/ceilings.
+                vr_anticlip_resolve();
+                int eyes = vr_eye_count();
+                for (int e = 0; e < eyes; e++) {
+                    if (vr_begin_eye(e)) {
+                        gfx_run_dl_vr_eye(vrDl, vr_eye_viewproj(e), vr_sky_viewproj(e), vr_eye_width(e), vr_eye_height(e));
+                        vr_end_eye(e);
+                    }
+                }
+                // The sky is now a 3D sphere rendered INSIDE the eye (world-locked). Only the
+                // head-locked HUD remains as an overlay layer. gVrFrameHasPerspective still routes
+                // 2D: post-3D 2D -> HUD; when no world exists, ALL 2D -> head-locked HUD (menus/title).
+                extern bool gVrSeenPerspective, gVrFrameHasPerspective;
+                gVrFrameHasPerspective = gVrSeenPerspective;
+                if (vr_begin_overlay(false)) { // HUD / menus (head-locked)
+                    gfx_run_dl_vr_overlay(vrDl, vr_overlay_width(), vr_overlay_height(), false);
+                    vr_end_overlay(false);
+                }
+                vr_submit();
+            }
+        }
         gfx_display_frame();
 
         // delay if our framerate is capped
@@ -452,6 +704,7 @@ void game_deinit(void) {
     if (gGameInited) { configfile_save(configfile_name()); }
     controller_shutdown();
     audio_shutdown();
+    vr_shutdown();
     network_shutdown(true, true, false, false);
     smlua_text_utils_shutdown();
     smlua_shutdown();
@@ -504,6 +757,15 @@ int main(int argc, char *argv[]) {
     // handle terminal arguments
     if (!parse_cli_opts(argc, argv)) { return 0; }
 
+    // One-step VR: with no flag, auto-detect a connected headset so the SAME exe runs in VR
+    // when a headset is present and flat otherwise. --vr forces it on, --novr forces it off.
+    if (!gCLIOpts.vr && !gCLIOpts.novr && vr_headset_present()) {
+        gCLIOpts.vr = true;
+        printf("VR headset detected -- enabling VR.\n");
+    }
+
+    if (gCLIOpts.vr) { vr_request_enable(); }
+
 #ifdef _WIN32
     // handle Windows console
     if (gCLIOpts.console || gCLIOpts.headless) {
@@ -527,6 +789,12 @@ int main(int argc, char *argv[]) {
 #endif
 
     configfile_load();
+
+    // In VR the headset's own frame loop (xrWaitFrame, inside vr_begin_frame) paces every frame. Desktop
+    // -window vsync would add a SECOND pacer locked to the monitor's refresh, and when the monitor and
+    // headset run at different rates the two clocks beat against each other into visible judder in the
+    // headset. Turn the desktop mirror's vsync off up front so only the headset paces the frame.
+    if (vr_is_requested()) { configWindow.vsync = 0; }
 
     legacy_folder_handler();
 

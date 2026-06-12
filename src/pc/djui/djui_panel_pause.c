@@ -9,6 +9,7 @@
 #include "djui_panel_menu.h"
 #include "djui_panel_confirm.h"
 #include "djui_panel_mod_menu.h"
+#include "djui_panel_vr.h"
 #include "pc/pc_main.h"
 #include "pc/network/network.h"
 #include "pc/lua/smlua_hooks.h"
@@ -50,6 +51,21 @@ static void djui_panel_pause_quit(struct DjuiBase* caller) {
                                 DLANG(PAUSE, QUIT_CLIENT),
                                 djui_panel_pause_quit_yes);
     }
+}
+
+// Quit straight to desktop without first stopping the host / disconnecting and dropping back to the
+// main menu. Saves the extra step that was awkward in VR.
+static void djui_panel_pause_quit_game_yes(UNUSED struct DjuiBase* caller) {
+    game_exit();
+}
+
+static void djui_panel_pause_quit_game(struct DjuiBase* caller) {
+    if (gMarioStates[0].action == ACT_PUSHING_DOOR || gMarioStates[0].action == ACT_PULLING_DOOR) { return; }
+
+    djui_panel_confirm_create(caller,
+                              "QUIT GAME",
+                              "Are you sure you want to quit to desktop?",
+                              djui_panel_pause_quit_game_yes);
 }
 
 void djui_panel_pause_create(struct DjuiBase* caller) {
@@ -107,6 +123,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
             djui_button_create(body, DLANG(PAUSE, MOD_MENU), DJUI_BUTTON_STYLE_NORMAL, djui_panel_mod_menu_create);
         }
 
+        // VR settings, ordered right after the Mod Menu.
+        djui_button_create(body, "VR", DJUI_BUTTON_STYLE_NORMAL, djui_panel_vr_create);
+
         djui_button_create(body, DLANG(PAUSE, RESUME), DJUI_BUTTON_STYLE_NORMAL, djui_panel_pause_resume);
 
         if (gNetworkType == NT_SERVER) {
@@ -114,6 +133,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
         } else {
             djui_button_create(body, DLANG(PAUSE, DISCONNECT), DJUI_BUTTON_STYLE_BACK, djui_panel_pause_quit);
         }
+
+        // Quit to desktop in one step instead of stopping the host first and quitting from the main menu.
+        djui_button_create(body, "Quit Game", DJUI_BUTTON_STYLE_BACK, djui_panel_pause_quit_game);
     }
 
     djui_panel_add(caller, panel, defaultBase);

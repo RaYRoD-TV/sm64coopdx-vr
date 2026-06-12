@@ -11,6 +11,7 @@
 #include "dialog_ids.h"
 #include "engine/math_util.h"
 #include "engine/surface_collision.h"
+#include "first_person_cam.h"
 #include "game_init.h"
 #include "interaction.h"
 #include "level_update.h"
@@ -2440,7 +2441,17 @@ void mario_process_interactions(struct MarioState *m) {
 void check_death_barrier(struct MarioState *m) {
     if (!m || m->playerIndex != 0) { return; }
 
-    if (m->pos[1] < m->floorHeight + 2048.0f) {
+    // First person with FP Flip Cam: falling out of the level eases the view up toward the level
+    // shrinking away above you, so let the fall run much closer to the death plane before the warp's
+    // fade starts - that look-up needs the extra seconds to be seen. Players who would bubble instead
+    // of dying (and already-bubbled players, whose float height is pinned to the stock margin below)
+    // keep the 2048 buffer so the bubble doesn't snap upward.
+    f32 margin = 2048.0f;
+    if (first_person_death_cinematic_active() && m->action != ACT_BUBBLED
+        && !(mario_can_bubble(m) && m->numLives > 0)) {
+        margin = 256.0f;
+    }
+    if (m->pos[1] < m->floorHeight + margin) {
         bool allowDeath = true;
         smlua_call_event_hooks(HOOK_ON_DEATH, m, &allowDeath);
         if (!allowDeath) { return; }

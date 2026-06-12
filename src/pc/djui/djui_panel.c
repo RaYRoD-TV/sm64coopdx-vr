@@ -19,6 +19,17 @@ bool djui_panel_is_active(void) {
     return (sPanelList != NULL);
 }
 
+bool djui_panel_is_vr_panel(void) {
+    return (sPanelList != NULL) && (sPanelList->base != NULL) && (sPanelList->base->tag == DJUI_PANEL_TAG_VR);
+}
+
+// True when the active menu panel is left-docked (Mods, lobbies, Player, DynOS) rather than centered.
+// Centered panels get hAlign == DJUI_HALIGN_CENTER in djui_panel_menu_create; left-docked ones keep the
+// default (LEFT). VR uses this to show such menus on the full-width panel so their left edge isn't cut.
+bool djui_panel_active_is_left_docked(void) {
+    return (sPanelList != NULL) && (sPanelList->base != NULL) && (sPanelList->base->hAlign != DJUI_HALIGN_CENTER);
+}
+
 static struct DjuiBase* djui_panel_find_first_interactable(struct DjuiBaseChild* child) {
     while (child) {
         if (child->base->interactable && child->base->interactable->enabled) {
@@ -85,6 +96,12 @@ struct DjuiPanel* djui_panel_add(struct DjuiBase* caller, struct DjuiThreePanel*
     sMoveAmount = 0;
 
     if (firstPanel) {
+        // A menu just opened: route the controller to the menu pad. Tied to panel-list lifecycle here
+        // (not per-creator) so it can't drift off as you navigate sub-panels.
+        gInteractableOverridePad = true;
+        // Default the cursor to controller control on open, so the gamepad captures the menu (e.g. the
+        // pause menu) immediately instead of staying stuck on the mouse. The mouse takes over on any move.
+        djui_cursor_clear_mouse_control();
         djui_base_set_location(panelBase, 0, 0);
         djui_cursor_input_controlled_center(panel->defaultElementBase);
         djui_base_set_enabled(panel->base, true);
@@ -138,6 +155,10 @@ void djui_panel_back(void) {
 
 void djui_panel_update(void) {
     if (sPanelList == NULL) { return; }
+    // Self-heal: a menu is active, so controller input must route to the menu pad. If anything cleared
+    // the flag mid-session (a panel close, a mod, etc.) this puts it back within one frame, so the
+    // gamepad can never get stuck dead in a menu.
+    if (!gInteractableOverridePad) { gInteractableOverridePad = true; }
     if (sPanelList->base == NULL) { return; }
     if (sPanelList->base->elem.height == 0) { return; }
 

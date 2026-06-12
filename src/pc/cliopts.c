@@ -35,6 +35,9 @@ static void print_help(void) {
     printf("--disable-mods            Disables all mods that are already enabled.\n");
     printf("--enable-mod MODNAME      Enables a mod.\n");
     printf("--headless                Enable Headless mode.\n");
+    printf("--vr                      Force OpenXR VR mode on (forces the GL backend). By default VR\n");
+    printf("                          auto-enables when a headset is detected; use this to skip the check.\n");
+    printf("--novr                    Force flatscreen; never auto-enable VR even with a headset connected.\n");
 #if defined(_WIN32)
     printf("--backend                 Sets the backend to either 'opengl' or 'directx'.");
 #endif
@@ -121,6 +124,10 @@ bool parse_cli_opts(int argc, char* argv[]) {
             gCLIOpts.enableMods[gCLIOpts.enabledModsCount - 1] = strdup(argv[++i]);
         } else if (!strcmp(argv[i], "--headless")) {
             gCLIOpts.headless = true;
+        } else if (!strcmp(argv[i], "--vr")) {
+            gCLIOpts.vr = true;
+        } else if (!strcmp(argv[i], "--novr")) {
+            gCLIOpts.novr = true;
 #if defined(_WIN32)
         } else if (!strcmp(argv[i], "--backend") && (i + 1) < argc) {
             if (!strcmp(argv[i + 1], "opengl")) {

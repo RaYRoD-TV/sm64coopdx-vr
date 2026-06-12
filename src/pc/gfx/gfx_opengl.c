@@ -858,12 +858,18 @@ bool gfx_opengl_check_compatibility(void) {
 static void gfx_opengl_on_resize(void) {
 }
 
+extern bool  gVrEyeActive;      // gfx_pc.c - eye pass clears to the surrounding sky color
+extern bool  gVrEyeClearAlpha0; // gfx_pc.c - HUD overlay clears to transparent alpha
+extern float gVrSkyR, gVrSkyG, gVrSkyB;
+
 static void gfx_opengl_start_frame(void) {
     frame_count++;
 
     glDisable(GL_SCISSOR_TEST);
     glDepthMask(GL_TRUE); // Must be set to clear Z-buffer
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    if (gVrEyeActive)           glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // transparent void - the world-locked sky cylinder shows through
+    else if (gVrEyeClearAlpha0) glClearColor(0.0f, 0.0f, 0.0f, 0.0f);          // HUD overlay: transparent
+    else                        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_SCISSOR_TEST);
 }

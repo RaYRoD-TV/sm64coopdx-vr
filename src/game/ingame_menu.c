@@ -126,6 +126,7 @@ u8 gDialogCharWidths[256] = { // TODO: Is there a way to auto generate this?
 
 s8 gDialogBoxState = DIALOG_STATE_OPENING;
 f32 gDialogBoxOpenTimer = DEFAULT_DIALOG_BOX_ANGLE;
+static s8 sDialogInputGrace = 0; // frames to ignore A/B right after a dialog opens, so the interact press that started it doesn't immediately advance or close page 1
 f32 gDialogBoxScale = DEFAULT_DIALOG_BOX_SCALE;
 s16 gDialogScrollOffsetY = 0;
 s8 gDialogBoxType = DIALOG_TYPE_ROTATE;
@@ -1920,6 +1921,7 @@ void render_dialog_entries(void) {
             if (gDialogBoxOpenTimer == 0.0f) {
                 gDialogBoxState = DIALOG_STATE_VERTICAL;
                 gDialogLineNum = 1;
+                sDialogInputGrace = 2; // don't let the press that opened the dialog advance/close page 1
             }
 #if !defined(VERSION_JP)
             lowerBound = 1;
@@ -1928,7 +1930,9 @@ void render_dialog_entries(void) {
         case DIALOG_STATE_VERTICAL:
             gDialogBoxOpenTimer = 0.0f;
 
-            if ((gPlayer1Controller->buttonPressed & A_BUTTON)
+            if (sDialogInputGrace > 0) {
+                sDialogInputGrace--; // swallow the opening press for a couple of frames
+            } else if ((gPlayer1Controller->buttonPressed & A_BUTTON)
                 || (gPlayer1Controller->buttonPressed & B_BUTTON)) {
                 if (gLastDialogPageStrPos == -1) {
                     handle_special_dialog_text(gDialogID);

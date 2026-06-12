@@ -101,6 +101,10 @@ struct CreditsEntry
 
 extern struct CreditsEntry *gCurrCreditsEntry;
 
+// VR: true while the act/course/star selector is live (set/cleared in star_select.c +
+// init_level). Used by the VR flat-panel predicate to route this hybrid screen to the panel.
+extern bool gVrInActSelector;
+
 extern struct MarioState gMarioStates[];
 extern struct MarioState *gMarioState;
 

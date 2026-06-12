@@ -136,6 +136,135 @@ static const u16 sSkyboxTileNumY = 3; // Shouldn't need to change this
 
 struct GrowingArray *gBackgroundSkyboxVerts = NULL;
 
+// VR: the sky is rendered as a 3D sphere INSIDE the eye (the projection layer is
+// world-locked, so the sphere inherits that and fully wraps with no black poles).
+Gfx *gVrSkyDomeGfx = NULL; // sphere display list, rebuilt each game frame
+u32  gVrSkyDomeFrame = 0;  // gGlobalTimer when built (staleness guard for the eye render)
+
+// Build the full 8x8 panorama as quads on a unit-ish sphere (radius in s16 range).
+// Rendered with a rotation-only view-proj (vr.c sSkyVP) so it sits at infinity.
+static Gfx *build_skybox_sphere_vr(s8 player, s8 background, s8 colorIndex) {
+    extern u32 gGlobalTimer;
+    // SMOOTH CLEAR-ZENITH DOME: parametric (ring x azimuth) sphere.
+    //   DOME_AZ  = azimuth segments (16-gon -> NO octagonal pole pinch; 8 was the pinch).
+    //   ringEl[] = latitude boundaries top->bottom (deg); upper rings densify toward the zenith.
+    // The cloud->clear smoothing is a per-vertex SHADE-ALPHA ramp + a combiner LERP toward
+    // ENVIRONMENT (the only guaranteed clear-sky color; row 0 is 8 distinct horizontal panorama
+    // tiles, NOT a vertical gradient, so reusing its V cannot give a clean fade and would break
+    // the other skyboxes). ENV alpha stays 255 -> output stays opaque (no black-eye blend bug).
+    #define DOME_AZ        16
+    #define DOME_SUBV      3       // fine sub-rings per panorama row (tile V is SPLIT across them -> NO vertical repeat)
+    #define FADE_START_DEG 30.0f   // *** TUNABLE: how low the clouds sit *** clouds full below this
+    #define FADE_END_DEG   60.0f   // fully clear (ENV) above this -> NO clouds at the zenith
+    const s32 NRINGS = 8 * DOME_SUBV; // 8 panorama rows x sub-rings
+
+    Gfx *dl = alloc_display_list((8 + NRINGS * DOME_AZ * 8) * sizeof(Gfx)); // 8 fixed + quads * 8 Gfx/quad
+    if (dl == NULL) { return NULL; }
+    Gfx *g = dl;
+    gSPDisplayList(g++, dl_skybox_begin);
+    gSPDisplayList(g++, dl_skybox_tile_tex_settings);
+    // Cloud->clear LERP: RGB = (TEXEL0 - ENV) * shade.a + ENV ; A = ENV.a (=255, opaque).
+    // shade.a = 1 -> pure panorama texel ; shade.a = 0 -> ENV clear-sky color. Deterministic per
+    // eye (replaces the inherited FADEA combiner; SHADE is faithful with the dome's lighting off).
+    gDPSetCombineLERP(g++, TEXEL0, ENVIRONMENT, SHADE_ALPHA, ENVIRONMENT, 0, 0, 0, ENVIRONMENT,
+                           TEXEL0, ENVIRONMENT, SHADE_ALPHA, ENVIRONMENT, 0, 0, 0, ENVIRONMENT);
+    gDPSetTextureFilter(g++, G_TF_BILERP); // bilinear-smooth the low-res 32x32 tiles (clouds were point-sampled/pixelated)
+
+    const f32 R        = 1000.0f;
+    const f32 DEG2RAD  = (f32)(M_PI / 180.0f);
+    const f32 camYaw   = sSkyBoxInfo[player].yaw;   // game-camera yaw: world-anchors the dome
+    const f32 camPitch = sSkyBoxInfo[player].pitch; // game-camera pitch: the diorama-only term the dome lacked
+    const s32 subPerCol = DOME_AZ / 8;              // az segments per panorama column
+    // 8 panorama rows (22.5 deg each); every row is split into DOME_SUBV fine sub-rings with the
+    // tile's V SPLIT across them -> drawn ONCE per row (no vertical repeat/stretch) while the
+    // per-vertex smoothstep alpha stays finely sampled (smooth cloud->clear fade, no banding).
+    for (s32 ring = 0; ring < NRINGS; ring++) {
+        const s32 row = ring / DOME_SUBV;
+        const s32 sv  = ring % DOME_SUBV;
+        const s32 srcRow = row;
+        const f32 rowTopDeg = 90.0f - (f32) row      * 22.5f;
+        const f32 rowBotDeg = 90.0f - (f32)(row + 1) * 22.5f;
+        const f32 elTopDeg = rowTopDeg + (rowBotDeg - rowTopDeg) * ((f32) sv      / (f32) DOME_SUBV);
+        const f32 elBotDeg = rowTopDeg + (rowBotDeg - rowTopDeg) * ((f32)(sv + 1) / (f32) DOME_SUBV);
+        const f32 el0 = elTopDeg * DEG2RAD;  // top latitude of this sub-ring
+        const f32 el1 = elBotDeg * DEG2RAD;  // bottom latitude
+        const s32 vTop = sv       * (31 << 5) / DOME_SUBV; // V split -> the tile is drawn ONCE per row
+        const s32 vBot = (sv + 1) * (31 << 5) / DOME_SUBV;
+        #define SKY_FADE_A(elDeg) ({ \
+            f32 _t = ((elDeg) - FADE_START_DEG) / (FADE_END_DEG - FADE_START_DEG); \
+            if (_t < 0.0f) { _t = 0.0f; } if (_t > 1.0f) { _t = 1.0f; } \
+            (u8)(255.0f * (1.0f - _t * _t * (3.0f - 2.0f * _t))); })
+        const u8 aTop = SKY_FADE_A(elTopDeg);
+        const u8 aBot = SKY_FADE_A(elBotDeg);
+        #undef SKY_FADE_A
+        for (s32 col = 0; col < DOME_AZ; col++) {
+            s32 panCol = col / subPerCol;                  // which of the 8 panorama columns (subPerCol hoisted above)
+            if (panCol < 0) { panCol = 0; }
+            if (panCol > 7) { panCol = 7; }
+            // Split the tile's U across its sub-segments so the panorama is NOT repeated/squished
+            // (the "blocky sky": each tile had been drawn full-width on EVERY sub-segment -> the
+            // 360 panorama wrapped in half the space). sub 0 = left half of the tile, sub 1 = right.
+            const s32 subIdx = col % subPerCol;
+            const s32 uLeft  = subIdx       * (31 << 5) / subPerCol;
+            const s32 uRight = (subIdx + 1) * (31 << 5) / subPerCol;
+            s32 tileIndex = srcRow * SKYBOX_COLS + panCol;
+            if (tileIndex < 0)  { tileIndex = 0;  }
+            if (tileIndex > 79) { tileIndex = 79; }
+            const Texture *tex = (background < 0 || background >= 10)
+                ? gCustomSkyboxPtrList[tileIndex]
+                : (*(SkyboxTexture *) segmented_to_virtual(sSkyboxTextures[background]))[tileIndex];
+
+            f32 cr = gSkyboxColor[0] / 255.0f;
+            f32 cg = gSkyboxColor[1] / 255.0f;
+            f32 cb = gSkyboxColor[2] / 255.0f;
+            u8 *color = sSkyboxColors[colorIndex];
+            gDPSetEnvColor(g++, color[0] * cr, color[1] * cg, color[2] * cb, 255);
+
+            // Game-camera yaw added to the geometric azimuth (world-anchors the dome, like the flat
+            // skybox scroll). camYaw/camPitch hoisted above; el0/el1/vTop/vBot/aTop/aBot computed per
+            // sub-ring above; the camera PITCH is applied inside SKY_SPH as an X-rotation.
+            f32 az0 = ((f32) col)       / (f32) DOME_AZ * 2.0f * M_PI + camYaw; // left  longitude (+ camera yaw)
+            f32 az1 = ((f32)(col + 1))  / (f32) DOME_AZ * 2.0f * M_PI + camYaw; // right longitude (+ camera yaw)
+
+            Vtx *v = alloc_display_list(4 * sizeof(Vtx));
+            if (v == NULL) { continue; }
+            // -Z forward base dir, then rotate about the X (right) axis by the CAMERA PITCH (FIX #1
+            // pitch term): rotation by -camPitch so camera-down (camPitch<0) lifts the dome horizon
+            // up to match the pitched diorama. If the horizon ends up tilted the wrong way, flip the
+            // two sin signs.
+            // az/camYaw azimuth offset + camPitch X-rotation are PRESERVED byte-for-byte. Only the
+            // shade alpha (last arg) now carries the cloud->clear ramp instead of constant 255.
+            #define SKY_SPH(idx, az, el, u, vv, a) do { \
+                f32 _x = R * cosf(el) * sinf(az); \
+                f32 _y = R * sinf(el); \
+                f32 _z = -R * cosf(el) * cosf(az); \
+                f32 _y2 =  _y * cosf(camPitch) + _z * sinf(camPitch); \
+                f32 _z2 = -_y * sinf(camPitch) + _z * cosf(camPitch); \
+                make_vertex(v, idx, (s16) _x, (s16) _y2, (s16) _z2, (u), (vv), 255, 255, 255, (a)); \
+            } while (0)
+            // vTop/vBot are the per-sub-ring V split (hoisted above) -> the tile is drawn ONCE per
+            // row, finely tessellated, with NO vertical repeat/stretch.
+            SKY_SPH(0, az0, el0, uLeft,  vTop, aTop);  // top-left
+            SKY_SPH(1, az0, el1, uLeft,  vBot, aBot);  // bottom-left
+            SKY_SPH(2, az1, el1, uRight, vBot, aBot);  // bottom-right
+            SKY_SPH(3, az1, el0, uRight, vTop, aTop);  // top-right
+            #undef SKY_SPH
+
+            gLoadBlockTexture(g++, 32, 32, G_IM_FMT_RGBA, tex);
+            gSPVertex(g++, VIRTUAL_TO_PHYSICAL(v), 4, 0);
+            gSPDisplayList(g++, dl_draw_quad_verts_0123);
+        }
+    }
+    gSPDisplayList(g++, dl_skybox_end);
+    gSPEndDisplayList(g);
+    gVrSkyDomeFrame = gGlobalTimer;
+    #undef DOME_AZ
+    #undef DOME_SUBV
+    #undef FADE_START_DEG
+    #undef FADE_END_DEG
+    return dl;
+}
+
 /**
  * Convert the camera's yaw into an x position into the scaled skybox image.
  *
@@ -258,6 +387,9 @@ void draw_skybox_tile_grid(Gfx **dlist, s8 background, s8 player, s8 colorIndex)
 }
 
 void *create_skybox_ortho_matrix(s8 player) {
+    // Always the flatscreen window (vanilla). In VR the eye renders the 3D sky sphere (gVrSkyDomeGfx),
+    // so this 2D DL is only ever drawn by the desktop mirror - which must show the normal full-screen
+    // window, not the 360 panorama. (The old VR-panorama branch was for a retired cylinder layer.)
     f32 left = sSkyBoxInfo[player].scaledX;
     f32 right = sSkyBoxInfo[player].scaledX + SCREEN_WIDTH;
     f32 bottom = sSkyBoxInfo[player].scaledY - SCREEN_HEIGHT;
@@ -286,7 +418,7 @@ void *create_skybox_ortho_matrix(s8 player) {
 Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
     extern Gfx* gBackgroundSkyboxGfx;
 
-    s32 dlCommandCount = 5 + (sSkyboxTileNumY * sSkyboxTileNumX) * 8; // 5 for the start and end, plus the amount of skybox tiles
+    s32 dlCommandCount = 5 + (sSkyboxTileNumY * sSkyboxTileNumX) * 8; // 5 for the start and end, plus the skybox tiles
 
     void *skybox;
     if (gRenderingInterpolated) {
@@ -304,6 +436,10 @@ Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
         Mtx *ortho = create_skybox_ortho_matrix(player);
 
         gSPDisplayList(dlist++, dl_skybox_begin);
+        // MUL (vanilla): compose the skybox ortho with the game's resident 3D perspective so the tile
+        // window stays anchored to camera yaw/pitch (no swim) and covers the full screen (no black gaps).
+        // In a VR session the desktop mirror restores the flatscreen perspective first (gfx_run) so this
+        // composes correctly there too.
         gSPMatrix(dlist++, VIRTUAL_TO_PHYSICAL(ortho), G_MTX_PROJECTION | G_MTX_MUL | G_MTX_NOPUSH);
         gSPDisplayList(dlist++, dl_skybox_tile_tex_settings);
         draw_skybox_tile_grid(&dlist, background, player, colorIndex);
@@ -370,8 +506,15 @@ Gfx *create_skybox_facing_camera(s8 player, s8 background, f32 fov,
     if (sSkyBoxInfo[player].yaw < 0) { sSkyBoxInfo[player].yaw += M_PI * 2.0; }
     sSkyBoxInfo[player].pitch = (M_PI / 2.0) - atan2(sqrtf(cameraFaceX * cameraFaceX + cameraFaceZ * cameraFaceZ), cameraFaceY);
 
+    // VR: the sky is composited as a world-locked cylinder layer by the runtime, so the
+    // window is drawn for the plain game camera here (no head-driving - the runtime does it).
+
     sSkyBoxInfo[player].scaledX = calculate_skybox_scaled_x(player, fov);
     sSkyBoxInfo[player].scaledY = calculate_skybox_scaled_y(player, fov);
+
+    // VR: also build the world-locked 3D sky sphere for the eye render (separate DL).
+    extern bool vr_is_active(void);
+    if (vr_is_active()) { gVrSkyDomeGfx = build_skybox_sphere_vr(player, background, colorIndex); }
 
     return init_skybox_display_list(player, background, colorIndex);
 }

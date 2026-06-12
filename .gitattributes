@@ -17,6 +17,9 @@
 *.json text
 *.yaml text
 
+# Windows batch files must keep CRLF or cmd.exe mis-parses them
+*.bat text eol=crlf
+
 # Same for binary
 *.bin binary
 *.m64 binary

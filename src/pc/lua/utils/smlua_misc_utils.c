@@ -192,7 +192,10 @@ void hud_show(void) {
 }
 
 bool hud_is_hidden(void) {
-    return gOverrideHideHud;
+    // Honour the VR/options "Hide HUD" toggle (gMenuHideHud) here too, so any mod that checks
+    // hud_is_hidden() to gate its gameplay HUD (e.g. character select) also respects it. Mod menus that
+    // don't check this (e.g. B3313's custom pause) stay visible - the distinction is the mod author's.
+    return gOverrideHideHud || gMenuHideHud;
 }
 
 s32 hud_get_value(enum HudDisplayValue type) {

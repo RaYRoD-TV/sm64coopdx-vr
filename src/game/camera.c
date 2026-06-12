@@ -34,6 +34,7 @@
 #include "game/sound_init.h"
 #include "pc/configfile.h"
 #include "pc/network/network.h"
+#include "pc/vr/vr.h"
 #include "pc/lua/smlua_hooks.h"
 #include "pc/djui/djui.h"
 #include "first_person_cam.h"
@@ -3179,6 +3180,87 @@ static u8 update_romhack_camera_override(struct Camera *c) {
 }
 
 /**
+ * First person owns the camera pose (update_camera returns early below), which used to leave the
+ * object-cutscene machinery dead while it was active. NPC dialogs (Toads, Bob-omb buddies, Koopa
+ * the Quick races...), sign messages and cap switches arm sObjectCutscene and then poll
+ * cutscene_object_with_dialog() every frame until the camera plays their cutscene and hands back
+ * the player's response. With nothing consuming the armed cutscene, the dialog box never appeared
+ * and Mario sat frozen in ACT_READING_NPC_DIALOG forever - in first person (VR or flatscreen)
+ * every cutscene-driven interaction hung, and the armed cutscene leaked into every later
+ * interaction (and could fire a stale sign cutscene after switching view modes).
+ *
+ * These are the cutscenes whose STATE FLOW matters to gameplay (dialog box, response, cap switch
+ * save, time stop). They run for real in first person, with the camera pose pinned.
+ */
+static bool first_person_cutscene_runs(u8 cutscene) {
+    switch (cutscene) {
+        case CUTSCENE_DIALOG:
+        case CUTSCENE_RACE_DIALOG:
+        case CUTSCENE_READ_MESSAGE:
+        case CUTSCENE_CAP_SWITCH_PRESS:
+            return true;
+    }
+    return false;
+}
+
+/**
+ * Keep the cutscene system alive while first person owns the camera. Dialog-style cutscenes run
+ * through the normal play_cutscene flow - creating the dialog box, capturing the response, saving
+ * cap switches, clearing time stop, marking the cutscene recently-played - but the camera/Lakitu
+ * pose is snapshotted and restored around the call, so the view stays where the player's head put
+ * it (the FP ease-back already pulls back to show Mario talking). Camera-flourish-only cutscenes
+ * (star-spawn pans, the prepare-cannon flyby...) are reported as already played so behaviors
+ * waiting on them advance immediately; flying the view around the level is exactly what first
+ * person shouldn't do. Switching view modes mid-dialog hands off cleanly in both directions
+ * because the real cutscene state (c->cutscene, gCutsceneTimer, sCutsceneShot) stays in sync.
+ */
+static void first_person_pump_cutscenes(struct Camera *c) {
+    // Consume cutscenes armed by objects (get_cutscene_from_mario_status normally does this).
+    if (c->cutscene == 0 && sObjectCutscene != 0) {
+        u8 pending = sObjectCutscene;
+        sObjectCutscene = 0;
+        if (first_person_cutscene_runs(pending)) {
+            start_cutscene(c, pending);
+        } else {
+            gRecentCutscene = pending;
+            sFramesSinceCutsceneEnded = 0;
+        }
+    }
+    // One-shot camera events (doors, door warps) are camera presentation we skip in first person;
+    // eat them so a stale event can't fire its cutscene later when the player switches view mode.
+    sMarioCamState->cameraEvent = 0;
+
+    if (c->cutscene != 0) {
+        // Run the real cutscene logic with the pose pinned: snapshot the camera and Lakitu, play,
+        // then put the pose back while keeping every state change the cutscene made.
+        struct LakituState savedLakitu = gLakituState;
+        Vec3f savedPos, savedFocus;
+        vec3f_copy(savedPos, c->pos);
+        vec3f_copy(savedFocus, c->focus);
+        s16 savedYaw = c->yaw;
+        s16 savedNextYaw = c->nextYaw;
+
+        sYawSpeed = 0;
+        play_cutscene(c);
+        sFramesSinceCutsceneEnded = 0;
+
+        gLakituState = savedLakitu;
+        vec3f_copy(c->pos, savedPos);
+        vec3f_copy(c->focus, savedFocus);
+        c->yaw = savedYaw;
+        c->nextYaw = savedNextYaw;
+    } else if (gRecentCutscene != 0 && sFramesSinceCutsceneEnded < 8) {
+        // Mirror update_camera's recently-played expiry so a finished dialog's response can't
+        // replay into the next interaction of the same type.
+        sFramesSinceCutsceneEnded++;
+        if (sFramesSinceCutsceneEnded >= 8) {
+            gRecentCutscene = 0;
+            sFramesSinceCutsceneEnded = 0;
+        }
+    }
+}
+
+/**
  * The main camera update function.
  * Gets controller input, checks for cutscenes, handles mode changes, and moves the camera
  */
@@ -3189,7 +3271,29 @@ void update_camera(struct Camera *c) {
     gCamera = c;
     update_camera_hud_status(c);
 
+    // VR Tabletop uses the free orbit camera (Puppycam) so you can look around the model from any angle.
+    // Force it on while in tabletop and restore the player's free-cam preference when leaving. Third-person,
+    // first-person and flatscreen are untouched. newcam_toggle is a no-op when already in the target state.
+    {
+        static bool sVrForcedNewcam = false;
+        if (vr_is_tabletop_mode()) {
+            if (!gNewCamera.isActive) { newcam_toggle(true); }
+            gNewCamera.hasCollision = true; // force orbit-camera wall collision so it can't pass through walls
+            sVrForcedNewcam = true;
+        } else if (sVrForcedNewcam) {
+            newcam_toggle(camera_config_is_free_cam_enabled());
+            gNewCamera.hasCollision = camera_config_is_collision_enabled(); // restore the player's preference
+            sVrForcedNewcam = false;
+        }
+    }
+
     if ((gOverrideFreezeCamera || get_first_person_enabled()) && !gDjuiInMainMenu) {
+        // First person never moves the camera here, but interactions still need the cutscene
+        // machinery (see first_person_pump_cutscenes). gOverrideFreezeCamera (a Lua mod freeze)
+        // keeps its full-freeze semantics and skips the pump.
+        if (!gOverrideFreezeCamera) {
+            first_person_pump_cutscenes(c);
+        }
         return;
     }
 
@@ -3207,7 +3311,13 @@ void update_camera(struct Camera *c) {
     if (c->cutscene == 0) {
         // Only process R_TRIG if 'fixed' is not selected in the menu
         if (cam_select_alt_mode(0) == CAM_SELECTION_MARIO && c->mode != CAMERA_MODE_NEWCAM) {
-            if ((sCurrPlayMode != PLAY_MODE_PAUSED) && gPlayer1Controller->buttonPressed & R_TRIG) {
+            // A VR Third-person is a fixed vantage you look INTO; the rigid behind-Mario "Mario cam" spins the
+            // whole diorama as Mario turns and reads as the view breaking. Keep Third-person on the Lakitu orbit
+            // camera - ignore the R toggle and snap back to Lakitu if it was left on Mario cam. Tabletop is
+            // excluded: it runs the free orbit camera (Puppycam) instead, handled above.
+            if (vr_is_active() && !vr_first_person_active() && !vr_is_tabletop_mode() && !vr_is_theater_mode()) {
+                set_cam_angle(CAM_ANGLE_LAKITU);
+            } else if ((sCurrPlayMode != PLAY_MODE_PAUSED) && gPlayer1Controller->buttonPressed & R_TRIG) {
                 bool allowSetCamAngle = true;
                 if (set_cam_angle(0) == CAM_ANGLE_LAKITU) {
                     smlua_call_event_hooks(HOOK_ON_CHANGE_CAMERA_ANGLE, CAM_ANGLE_MARIO, &allowSetCamAngle);
@@ -3724,7 +3834,13 @@ void zoom_out_if_paused_and_outside(struct GraphNodeCamera *camera) {
         areaMaskIndex = 0;
         areaBit = 0;
     }
-    if (gCameraMovementFlags & CAM_MOVE_PAUSE_SCREEN && !gDjuiInPlayerMenu && !get_first_person_enabled()) {
+    // VR stereo views (Diorama / Third-person) keep the live world in view while paused - especially the VR
+    // settings panel, where you tune the diorama and need to see it at its in-game framing. The classic pause
+    // zoom-out yanks the camera 6000 units toward the area center, which reads as the whole diorama leaping
+    // far away the moment the menu opens. Theater shows the flat frame on a screen, so it keeps the classic look.
+    bool vrKeepsWorldFraming = vr_is_active() && !vr_is_theater_mode();
+    if (gCameraMovementFlags & CAM_MOVE_PAUSE_SCREEN && !gDjuiInPlayerMenu && !get_first_person_enabled()
+        && !vrKeepsWorldFraming) {
         if (sFramesPaused >= 2) {
             if (sZoomOutAreaMasks[areaMaskIndex] & areaBit) {
 
@@ -9557,9 +9673,15 @@ BAD_RETURN(s32) cutscene_read_message_start(struct Camera *c) {
 
     sCutsceneVars[1].angle[0] = sCUpCameraPitch;
     sCutsceneVars[1].angle[1] = sModeOffsetYaw;
-    sCUpCameraPitch = -0x830;
+    // VR close-up keeps the dialog in the diorama view with the text as a head-locked overlay, so DON'T
+    // pitch the camera down into Mario's face (it pulls the miniature view in too far). Flatscreen,
+    // first-person and tabletop keep the normal dialog zoom.
+    if (!vr_is_active() || vr_first_person_active() || vr_is_tabletop_mode()) {
+        sCUpCameraPitch = -0x830;
+    }
     sModeOffsetYaw = 0;
     sCutsceneVars[0].angle[0] = 0;
+    sCutsceneVars[2].angle[0] = 0; // wait-for-dialog timeout counter (see cutscene_read_message case 0)
 }
 
 UNUSED static void unused_cam_to_mario(struct Camera *c) {
@@ -9586,13 +9708,33 @@ BAD_RETURN(s32) cutscene_read_message(struct Camera *c) {
         case 0:
             if (get_dialog_id() != DIALOG_NONE) {
                 sCutsceneVars[0].angle[0] += 1;
+                sCutsceneVars[2].angle[0] = 0;
                 //set_time_stop_flags(TIME_STOP_ENABLED | TIME_STOP_DIALOG);
+            } else if (++sCutsceneVars[2].angle[0] > 90) {
+                // Hardening for the softlock documented below: the message never actually appeared
+                // (interaction cancelled, or a dialog closed/reopened on the same frame). Without this
+                // the cutscene waits forever and the camera stays parked at the sign. End it cleanly
+                // through the same restore path the normal exit uses.
+                printf("[SIGNCAM] dialog never opened - ending read-message cutscene\n");
+                gCutsceneTimer = CUTSCENE_LOOP;
+                retrieve_info_star(c);
+                transition_next_state(c, 15);
+                sStatusFlags |= CAM_FLAG_UNUSED_CUTSCENE_ACTIVE;
+                clear_time_stop_flags(TIME_STOP_ENABLED | TIME_STOP_DIALOG);
+                sCUpCameraPitch = sCutsceneVars[1].angle[0];
+                sModeOffsetYaw = sCutsceneVars[1].angle[1];
+                cutscene_unsoften_music(c);
             }
             break;
         // Leave the dialog.
         case 1:
-            move_mario_head_c_up(c);
-            update_c_up(c, c->focus, c->pos);
+            // In VR the dialog stays in the stereo diorama view (pc_main keeps it 3D), so the C-up
+            // zoom-to-face would shove the camera into Mario and wreck the miniature framing. Skip it in
+            // VR; the dialog text shows as a head-locked overlay and Mario stays visible in the diorama.
+            if (!vr_is_active()) {
+                move_mario_head_c_up(c);
+                update_c_up(c, c->focus, c->pos);
+            }
 
             // This could cause softlocks. If a message starts one frame after another one closes, the
             // cutscene will never end.

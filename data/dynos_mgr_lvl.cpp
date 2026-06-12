@@ -88,9 +88,14 @@ void DynOS_Lvl_Activate(s32 modIndex, const SysPath &aFilename, const char *aLev
     auto& newScriptNode = newScripts[newScripts.Count() - 1];
     const void* originalScript = DynOS_Builtin_ScriptPtr_GetFromName(newScriptNode->mName.begin());
     if (originalScript == NULL) {
+        // Not a vanilla script name; the pack stays loadable as a custom level
+        // but replaces nothing. Loud enough to spot when a romhack mod fails
+        // to take over the campaign.
+        PrintInfo("Level '%s' does not match a vanilla script, no override", newScriptNode->mName.begin());
         return;
     }
 
+    PrintInfo("Level '%s' overrides the vanilla script", newScriptNode->mName.begin());
     DynOS_Level_Override((void*)originalScript, newScriptNode->mData, modIndex);
     _OverrideLevelScripts.push_back({ originalScript, newScriptNode->mData, _Node});
 }

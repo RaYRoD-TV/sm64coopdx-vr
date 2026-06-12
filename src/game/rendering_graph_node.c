@@ -1427,6 +1427,11 @@ static void geo_process_shadow(struct GraphNodeShadow *node) {
  *
  * Since (0,0,0) is unaffected by rotation, columns 0, 1 and 2 are ignored.
  */
+// VR renders the same display list from each eye's own viewpoint, so the game
+// camera's frustum no longer matches what you're actually looking at. Skip the
+// frustum/distance cull while VR is active so objects don't pop out around you.
+extern bool vr_is_active(void);
+
 static s32 obj_is_in_view(struct GraphNodeObject *node, Mat4 matrix) {
     if (!node || !gCurGraphNodeCamFrustum) { return FALSE; }
 
@@ -1435,6 +1440,8 @@ static s32 obj_is_in_view(struct GraphNodeObject *node, Mat4 matrix) {
     } else if (node->skipInViewCheck) {
         return TRUE;
     }
+
+    if (vr_is_active()) { return TRUE; } // VR: no frustum/distance cull (one DL feeds both eyes)
 
     // ! @bug The aspect ratio is not accounted for. When the fov value is 45,
     // the horizontal effective fov is actually 60 degrees, so you can see objects

@@ -659,6 +659,42 @@ static void calculate_normal_dir(const Light_t *light, Vec3f coeffs, bool applyL
     vec3f_normalize(coeffs);
 }
 
+// --- VR per-eye stereo --------------------------------------------------------
+// When gVrEyeActive, perspective (3D world) draws have the game's projection
+// replaced by the per-eye VR view-projection (camera space -> diorama placement
+// -> eye view -> eye clip). HUD/ortho draws (P[3][3] > 0.5) are left untouched.
+// gVrEyeVP is supplied per eye by vr.c via gfx_run_dl_vr_eye().
+bool        gVrEyeActive     = false;  // eye pass (read by gfx_opengl for the sky-color clear)
+static bool gVrOverlayActive = false;  // overlay pass: render only 2D
+static bool gVrOverlaySky    = false;  // overlay pass kind: true = sky (2D before 3D), false = HUD (after)
+// Desktop-mirror skybox perspective preservation (see gfx_run / gfx_sp_matrix): snapshot the flatscreen
+// 3D perspective while the mirror renders, restore it for the next mirror frame's skybox MUL.
+static float sLastFlatPersp[4][4];
+static bool  sLastFlatPerspValid = false;
+static bool  sInFlatRun = false;
+bool        gVrSeenPerspective = false; // a 3D draw has occurred this pass (sky/HUD split point)
+bool        gVrFrameHasPerspective = false; // did the world (any 3D) draw this frame? set by pc_main after the eye passes
+static int  sVrOverlayKept = 0; // diagnostic: 2D tris kept in the current overlay pass
+static int  sVrDomeKept = 0;    // diagnostic: sky-dome tris drawn in the current eye
+bool        gVrEyeClearAlpha0 = false; // (read by gfx_opengl) clear the HUD overlay void to transparent
+float       gVrSkyR = 0.0f, gVrSkyG = 0.0f, gVrSkyB = 0.0f; // VR eye-clear backdrop (black; the real sky renders over it)
+float       gVrSkyBakedYaw = 0.0f, gVrSkyBakedPitch = 0.0f; // head pose baked into the sky window this frame (set by skybox.c)
+static Mat4 gVrEyeVP;
+static Mat4 gVrSkyVP;             // current eye's rotation-only sky view-proj (eye-sphere dome at infinity)
+static bool gVrInSkyDome = false; // rendering the world-locked sky dome: use gVrSkyVP, don't ortho-skip
+
+// Recompute MP = modelview * projection, swapping in the per-eye VR view-
+// projection for perspective draws while a VR eye is being rendered.
+static void gfx_update_mp_matrix(void) {
+    if (gVrInSkyDome) {
+        memcpy(rsp.MP_matrix, gVrSkyVP, sizeof(rsp.MP_matrix)); // sky sphere: rotation-only world-locked VP (no parallax)
+    } else if (gVrEyeActive && rsp.P_matrix[3][3] < 0.5f) {
+        mtxf_mul(rsp.MP_matrix, rsp.modelview_matrix_stack[rsp.modelview_matrix_stack_size - 1], gVrEyeVP);
+    } else {
+        mtxf_mul(rsp.MP_matrix, rsp.modelview_matrix_stack[rsp.modelview_matrix_stack_size - 1], rsp.P_matrix);
+    }
+}
+
 static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
 
     Mat4 matrix;
@@ -693,6 +729,12 @@ static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
         } else {
             mtxf_mul(rsp.P_matrix, matrix, rsp.P_matrix);
         }
+        // While the desktop mirror renders, snapshot the flatscreen 3D perspective (P[3][3] ~ 0) so the
+        // next mirror frame's skybox can compose against it even after VR passes overwrite P_matrix.
+        if (sInFlatRun && rsp.P_matrix[3][3] < 0.5f) {
+            mtxf_copy(sLastFlatPersp, rsp.P_matrix);
+            sLastFlatPerspValid = true;
+        }
     } else { // G_MTX_MODELVIEW
         if ((parameters & G_MTX_PUSH) && rsp.modelview_matrix_stack_size < MAX_MATRIX_STACK_SIZE) {
             ++rsp.modelview_matrix_stack_size;
@@ -705,7 +747,7 @@ static void OPTIMIZE_O3 gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
         }
         rsp.lights_changed = 1;
     }
-    mtxf_mul(rsp.MP_matrix, rsp.modelview_matrix_stack[rsp.modelview_matrix_stack_size - 1], rsp.P_matrix);
+    gfx_update_mp_matrix();
 }
 
 static void gfx_sp_pop_matrix(uint32_t count) {
@@ -713,13 +755,18 @@ static void gfx_sp_pop_matrix(uint32_t count) {
         if (rsp.modelview_matrix_stack_size > 0) {
             --rsp.modelview_matrix_stack_size;
             if (rsp.modelview_matrix_stack_size > 0) {
-                mtxf_mul(rsp.MP_matrix, rsp.modelview_matrix_stack[rsp.modelview_matrix_stack_size - 1], rsp.P_matrix);
+                gfx_update_mp_matrix();
             }
         }
     }
 }
 
 static float gfx_adjust_x_for_aspect_ratio(float x) {
+    // VR eye pass uses an OpenXR projection (vr.c mat_proj_fov) that ALREADY bakes the
+    // correct per-eye aspect from the fov tangents. The 4:3 x_adjust_ratio correction is
+    // only for SM64's 4:3-assuming guPerspective; applying it here double-corrects and
+    // horizontally warps BOTH the sky sphere and the diorama vs the fov submitted to the runtime.
+    if (gVrEyeActive) { return x; }
     float adjusted = x * gfx_current_dimensions.x_adjust_ratio;
 
     // Force 2D coordinates to be aligned perfectly on the nearest pixel
@@ -1065,17 +1112,38 @@ static void OPTIMIZE_O3 gfx_sp_vertex(size_t n_vertices, size_t dest_index, cons
 }
 
 static void OPTIMIZE_O3 gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
+    // VR: eye pass = 3D only; overlay passes = 2D only, split into sky (2D drawn
+    // before the first 3D) and HUD (2D drawn after) so each gets its own layer.
+    {
+        bool ortho = rsp.P_matrix[3][3] > 0.5f;
+        if (!ortho) gVrSeenPerspective = true;
+        if (gVrEyeActive && ortho && !gVrInSkyDome) { return; } // skip 2D in the eye, EXCEPT the world-locked 3D sky dome
+        if (gVrOverlayActive) {
+            if (!ortho) { return; }                                // overlay: never 3D
+            if (gVrOverlaySky  && (gVrSeenPerspective || !gVrFrameHasPerspective)) { return; } // sky: pre-3D 2D, ONLY when a world exists this frame
+            if (!gVrOverlaySky && gVrFrameHasPerspective && !gVrSeenPerspective) { return; }   // HUD: post-3D 2D when world exists; ALL 2D when no world (menus/title -> head-locked)
+            sVrOverlayKept++; // this 2D tri survives into the current overlay (sky or HUD)
+        }
+    }
+
+    if (gVrInSkyDome) { sVrDomeKept++; } // diagnostic: count sky-dome tris reaching the draw
+
     struct GfxVertex *v1 = &rsp.loaded_vertices[vtx1_idx];
     struct GfxVertex *v2 = &rsp.loaded_vertices[vtx2_idx];
     struct GfxVertex *v3 = &rsp.loaded_vertices[vtx3_idx];
     struct GfxVertex *v_arr[3] = {v1, v2, v3};
 
-    if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
-        // The whole triangle lies outside the visible area
+    if (!gVrInSkyDome && (v1->clip_rej & v2->clip_rej & v3->clip_rej)) {
+        // The whole triangle lies outside the visible area.
+        // Skip this CPU trivial-reject for the world-locked VR sky dome: dome tris straddle
+        // the eye, so behind-eye verts get clip bits that AND together and FALSELY reject a
+        // whole 45-degree tile (the front-left black strip). There is NO CPU near-clip here --
+        // raw clip-space coords go to the GPU (vertex shader gl_Position = aVtxPos), which
+        // near-clips correctly. Letting all dome tris through fixes the gap.
         return;
     }
 
-    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
+    if (!gVrInSkyDome && (rsp.geometry_mode & G_CULL_BOTH) != 0) { // dome verts can be behind-eye (w<0) -> cull cross-product (x/w) is garbage; never cull the dome
         float dx1 = v1->x / (v1->w) - v2->x / (v2->w);
         float dy1 = v1->y / (v1->w) - v2->y / (v2->w);
         float dx2 = v3->x / (v3->w) - v2->x / (v2->w);
@@ -1627,6 +1695,13 @@ static void gfx_dp_set_fill_color(uint32_t packed_color) {
 }
 
 static void gfx_draw_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry) {
+    // VR: ORTHO rectangles (HUD sprites) belong on the HUD overlay only, never in the eye.
+    // BUT a PERSPECTIVE fill rect (e.g. the act/course-select solid background, drawn under the
+    // menu's perspective camera) is scene content -> let it through in the eye so hybrid menus
+    // (3D stars + a full-screen bg fill) get their background instead of a black void.
+    if (gVrEyeActive && rsp.P_matrix[3][3] > 0.5f) { return; } // block only ortho HUD rects in the eye
+    if (gVrOverlayActive && gVrOverlaySky) { return; }
+
     uint32_t saved_other_mode_h = rdp.other_mode_h;
     uint32_t cycle_type = (rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE));
 
@@ -2056,6 +2131,7 @@ static void gfx_sp_reset(void) {
     num_gfx_states = 0;
 }
 
+
 void gfx_get_dimensions(uint32_t *width, uint32_t *height) {
     gfx_wapi->get_dimensions(width, height);
     if (configForce4By3) {
@@ -2101,6 +2177,11 @@ void gfx_start_frame(void) {
 
 void gfx_run(Gfx *commands) {
     gfx_sp_reset();
+    sInFlatRun = true;
+    // In a VR session the desktop mirror renders after the VR passes left their projection resident;
+    // restore the flatscreen perspective so the mirror's skybox composes full-screen (no black bars).
+    { extern bool vr_is_active(void);
+      if (vr_is_active() && sLastFlatPerspValid) { mtxf_copy(rsp.P_matrix, sLastFlatPersp); } }
 
     sHasInverseCameraMatrix = false;
 
@@ -2115,6 +2196,158 @@ void gfx_run(Gfx *commands) {
     //double t0 = gfx_wapi->get_time();
     gfx_rapi->start_frame();
     gfx_run_dl(commands);
+}
+
+// VR: render one eye's view of the display list into the currently-bound (eye)
+// framebuffer with a horizontal view-space stereo offset. The caller binds the
+// eye FBO + sets the viewport; we reset RSP state, clear, run the list, flush.
+void gfx_run_dl_vr_eye(Gfx *commands, const float eyeViewProj[16], const float skyViewProj[16], int eyeW, int eyeH) {
+    // Make fast3d scale viewport + aspect to the eye buffer (not the desktop
+    // window) for the duration of this eye's render, then restore.
+    uint32_t savedW  = gfx_current_dimensions.width;
+    uint32_t savedH  = gfx_current_dimensions.height;
+    float    savedAR = gfx_current_dimensions.aspect_ratio;
+    float    savedXA = gfx_current_dimensions.x_adjust_ratio;
+    gfx_current_dimensions.width  = (uint32_t)eyeW;
+    gfx_current_dimensions.height = (uint32_t)eyeH;
+    gfx_current_dimensions.aspect_ratio = (float)eyeW / (float)eyeH;
+    gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
+
+    memcpy(gVrEyeVP, eyeViewProj, sizeof(gVrEyeVP));
+    gfx_sp_reset();
+    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
+    sHasInverseCameraMatrix = false;
+    gVrSeenPerspective = false;
+    gVrEyeActive = true;
+    gfx_rapi->start_frame();
+    // World-locked sky sphere FIRST (background, rotation-only VP at infinity), then the
+    // diorama renders over it. Definitive sky: full coverage, no black, decoupled from the HUD.
+    {
+        extern Gfx *gVrSkyDomeGfx; extern unsigned int gVrSkyDomeFrame, gGlobalTimer;
+        sVrDomeKept = 0;
+        bool domeGuard = (skyViewProj && gVrSkyDomeGfx && gVrSkyDomeFrame == gGlobalTimer);
+        if (domeGuard) {
+            memcpy(gVrSkyVP, skyViewProj, sizeof(gVrSkyVP));
+            gVrInSkyDome = true;
+            gfx_update_mp_matrix();   // force MP = sky VP for the dome's vertices
+            // VR sky dome: the dl_skybox_begin display list sets NO render mode / blend mode /
+            // G_ZBUFFER, so the dome would otherwise INHERIT rdp.other_mode_l + rsp.geometry_mode
+            // from whatever pass ran before this eye. That entry state differs per eye: eye 0
+            // (drawn first) inherits the desktop frame's HUD/2D tail (GL_BLEND enabled), eye 1
+            // inherits eye 0's opaque diorama tail (GL_BLEND disabled). With the VR clear at
+            // (0,0,0,0) and the fixed src-alpha blend func, an inherited GL_BLEND turns the
+            // FADEA (TEXEL0*ENV) dome into src.rgb*src.a + 0 == black -> the left-eye-only black
+            // sky. Force the dome's GL state explicitly (opaque background at infinity, no depth
+            // test/write/decal) and sync the lazy rendering_state cache so it is independent of
+            // any leaked state. Both eyes now render the dome identically.
+            gfx_rapi->set_use_alpha(false);   rendering_state.alpha_blend = false;
+            gfx_rapi->set_depth_test(false);  rendering_state.depth_test  = false;
+            gfx_rapi->set_depth_mask(false);  rendering_state.depth_mask  = false;
+            gfx_rapi->set_zmode_decal(false); rendering_state.decal_mode  = false;
+            // The dome DL sets NO scissor, so eye 0 (first) inherits the PREVIOUS frame's
+            // HUD-overlay scissor box (smaller than the 3072x3264 eye) -> most of the dome is
+            // scissored away -> the left-eye-only black sky. (start_frame re-enables
+            // GL_SCISSOR_TEST but never resets the box; the diorama sets the full-eye scissor
+            // only AFTER the dome.) Force the full-eye scissor + sync the cache so both eyes
+            // render the dome fully; the diorama re-sets its own scissor right after.
+            gfx_rapi->set_scissor(0, 0, (int)gfx_current_dimensions.width, (int)gfx_current_dimensions.height);
+            rendering_state.scissor.x = 0;
+            rendering_state.scissor.y = 0;
+            rendering_state.scissor.width  = gfx_current_dimensions.width;
+            rendering_state.scissor.height = gfx_current_dimensions.height;
+            gfx_run_dl(gVrSkyDomeGfx);
+            gVrInSkyDome = false;
+        }
+        { static int dc = 0; int c = dc++; if ((c % 240) < 2)
+            printf("[VRdome] call=%d(0=L,1=R) guard=%d skyVP=%p kept=%d frame=%u timer=%u\n",
+                   c & 1, (int)domeGuard, (void*)skyViewProj, sVrDomeKept, gVrSkyDomeFrame, gGlobalTimer); }
+    }
+    gfx_run_dl(commands);
+    gfx_flush();
+    gVrEyeActive = false;
+
+    gfx_current_dimensions.width  = savedW;
+    gfx_current_dimensions.height = savedH;
+    gfx_current_dimensions.aspect_ratio = savedAR;
+    gfx_current_dimensions.x_adjust_ratio = savedXA;
+}
+
+// VR: render only the 2D content (sky + HUD + menus) into the bound overlay FBO,
+// for a head-locked quad layer. Skips all 3D/perspective draws.
+void gfx_run_dl_vr_overlay(Gfx *commands, int w, int h, bool sky) {
+    uint32_t savedW  = gfx_current_dimensions.width;
+    uint32_t savedH  = gfx_current_dimensions.height;
+    float    savedAR = gfx_current_dimensions.aspect_ratio;
+    float    savedXA = gfx_current_dimensions.x_adjust_ratio;
+    gfx_current_dimensions.width  = (uint32_t)w;
+    gfx_current_dimensions.height = (uint32_t)h;
+    gfx_current_dimensions.aspect_ratio = (float)w / (float)h;
+    gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
+
+    gfx_sp_reset();
+    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
+    sHasInverseCameraMatrix = false;
+    gVrSeenPerspective = false;
+    gVrOverlaySky = sky;
+    gVrOverlayActive = true;
+    sVrOverlayKept = 0;
+    // HUD overlay: transparent so the world/diorama shows through behind the UI.
+    // BUT on a 2D-only frame (no 3D this frame: menus / title / course-select / dialog)
+    // clear OPAQUE black so the menu's own full-screen background fill survives and the
+    // panel is presented as a solid head-locked screen instead of a UI in a black void.
+    gVrEyeClearAlpha0 = !sky && gVrFrameHasPerspective; // sky overlay: opaque; HUD: transparent over a world, opaque on menus
+    gfx_rapi->start_frame();    // clears the overlay FBO
+    gVrEyeClearAlpha0 = false;
+    gfx_run_dl(commands);
+    gfx_flush();
+    gVrOverlayActive = false;
+    { static int d = 0; if ((++d % 120) == 0) printf("[VRovl] %s kept=%d fhp=%d sp=%d\n", sky ? "SKY" : "HUD", sVrOverlayKept, gVrFrameHasPerspective, gVrSeenPerspective); }
+
+    gfx_current_dimensions.width  = savedW;
+    gfx_current_dimensions.height = savedH;
+    gfx_current_dimensions.aspect_ratio = savedAR;
+    gfx_current_dimensions.x_adjust_ratio = savedXA;
+}
+
+// VR FLATSCREEN-ON-A-PANEL: render the WHOLE display list exactly like the desktop window
+// (full 2D + 3D, the game's own projection, NO diorama scaling, NO 2D/3D pass split) into the
+// caller-bound (HUD/panel) FBO. Used for ALL non-gameplay screens (title, menus, file/save
+// select, act/course/star select, dialog, pause, credits) so they look identical to flatscreen
+// on one opaque head-locked quad. Every VR gating flag is forced FALSE so nothing is dropped
+// and gfx_opengl_start_frame clears OPAQUE black (gfx_opengl.c else-branch). The DL is rendered
+// pillarboxed to SM64's 4:3 inside the (16:9) swapchain via x_adjust_ratio; the caller sizes the
+// quad 4:3 so the side bars read as a real 4:3 monitor floating in VR (not a stretched image).
+void gfx_run_dl_vr_panel(Gfx *commands, int w, int h) {
+    uint32_t savedW  = gfx_current_dimensions.width;
+    uint32_t savedH  = gfx_current_dimensions.height;
+    float    savedAR = gfx_current_dimensions.aspect_ratio;
+    float    savedXA = gfx_current_dimensions.x_adjust_ratio;
+    gfx_current_dimensions.width  = (uint32_t)w;
+    gfx_current_dimensions.height = (uint32_t)h;
+    gfx_current_dimensions.aspect_ratio = (float)w / (float)h;
+    // x_adjust_ratio centers the SM64 4:3 frame inside the swapchain (same as gfx_start_frame).
+    gfx_current_dimensions.x_adjust_ratio = (4.0f / 3.0f) / gfx_current_dimensions.aspect_ratio;
+
+    gfx_sp_reset();
+    sInFlatRun = false; // a VR pass, not the mirror: don't snapshot this pass's projection as "flatscreen"
+    sHasInverseCameraMatrix = false;
+    // FLAT: all VR flags FALSE -> drop nothing (gfx_sp_tri1 / gfx_draw_rectangle keep ALL tris+
+    // rects), use the GAME projection (gfx_update_mp_matrix else-branch), opaque-black clear.
+    gVrEyeActive       = false;
+    gVrOverlayActive   = false;
+    gVrOverlaySky      = false;
+    gVrInSkyDome       = false;
+    gVrSeenPerspective = false;
+    gVrEyeClearAlpha0  = false;
+
+    gfx_rapi->start_frame();    // clears the panel FBO opaque black + depth
+    gfx_run_dl(commands);       // full DL: 2D + 3D together, game's own projection
+    gfx_flush();
+
+    gfx_current_dimensions.width  = savedW;
+    gfx_current_dimensions.height = savedH;
+    gfx_current_dimensions.aspect_ratio = savedAR;
+    gfx_current_dimensions.x_adjust_ratio = savedXA;
 }
 
 void gfx_end_frame_render(void) {

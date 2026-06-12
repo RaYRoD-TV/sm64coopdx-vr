@@ -470,7 +470,7 @@ SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels
 BIN_DIRS := bin bin/$(VERSION)
 
 # PC files
-SRC_DIRS += src/pc src/pc/gfx src/pc/audio src/pc/controller src/pc/fs src/pc/fs/packtypes src/pc/mods src/pc/dev src/pc/network src/pc/network/packets src/pc/network/socket src/pc/network/coopnet src/pc/utils src/pc/utils/miniz src/pc/djui src/pc/lua src/pc/lua/utils src/pc/os
+SRC_DIRS += src/pc src/pc/gfx src/pc/audio src/pc/controller src/pc/fs src/pc/fs/packtypes src/pc/mods src/pc/dev src/pc/network src/pc/network/packets src/pc/network/socket src/pc/network/coopnet src/pc/utils src/pc/utils/miniz src/pc/djui src/pc/lua src/pc/lua/utils src/pc/os src/pc/vr
 
 ifeq ($(DISCORD_SDK),1)
   SRC_DIRS += src/pc/discord
@@ -725,6 +725,8 @@ endif
 # SDL2 Flags
 ifeq ($(WINDOWS_BUILD),1)
   BACKEND_LDFLAGS += -lglew32 -lglu32 -lopengl32
+  # OpenXR loader (VR). It's a DLL import lib, so link it dynamically despite -static above.
+  BACKEND_LDFLAGS += -Wl,-Bdynamic -lopenxr_loader -Wl,-Bstatic
 else ifeq ($(TARGET_RPI),1)
   BACKEND_LDFLAGS += -lGLESv2
 else ifeq ($(TARGET_RK3588),1)

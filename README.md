@@ -1,22 +1,101 @@
-![sm64coopdx Logo](textures/segment2/custom_coopdx_logo.rgba32.png)
+# sm64coopdx VR
 
-sm64coopdx is an online multiplayer project for the Super Mario 64 PC port that synchronizes all entities and every level for multiple players. The project was started by the Coop Deluxe Team. The purpose is to actively maintain and improve, but also continue sm64ex-coop, created by djoslin0. More features, customization, and power to the Lua API allow modders and players to enjoy Super Mario 64 more than ever!
+Super Mario 64 in VR, built on the sm64coopdx PC port. With a headset on, the game renders in immersive VR. You can lean around and look into the world.
+With no headset it just runs as the normal flatscreen game. Same exe, it works out which one you
+want on its own.
 
-Feel free to report bugs or contribute to the project.
+Tested on Quest 3 and Pimax Dream Air, but it should run with any PCVR / OpenXR runtime.
 
-## Initial Goal (Accomplished)
-Create a mod for the PC port where multiple people can play together online.
+You bring your own Super Mario 64 US ROM. There's nothing from Nintendo in this repo, just code.
+coopdx reads the rom locally when the game starts, same as normal sm64coopdx, and it never leaves
+your machine.
 
-Unlike previous multiplayer projects, this one synchronizes enemies and events. This allows players to interact with the same world at the same time.
+## Download and play
 
-Interestingly enough though, the goal of the project has slowly evolved over time from simply just making a Super Mario 64 multiplayer mod to constantly maintaining and improving the project (notably the Lua API.)
+1. Grab sm64coopdx-vr.zip from the Releases page.
+2. Unzip it somewhere.
+3. Put your Super Mario 64 US ROM in the folder and name it baserom.us.z64. (On first run you can
+   also just drag any .z64 onto the window and it sets that up for you.)
+4. Run sm64coopdx.exe.
 
-## Documentation
+If a headset is connected it boots into VR, otherwise you get the flat game. Start your VR runtime
+first (Quest Link, Virtual Desktop, SteamVR) if you want VR. Your mods and saves carry over like
+normal.
 
-sm64coopdx is moddable via Lua, similar to Roblox and Garry's Mod's Lua APIs. To get started, click [here](docs/lua/lua.md) to see the Lua documentation. If you want to contribute to the repo, you can view the C documentation [here](docs/c/c.md).
+Already have sm64coopdx installed? You can skip the unzip step and just copy the exe plus all the
+DLLs from the release (libopenxr_loader.dll and the libgcc/libstdc++/libwinpthread ones next to it)
+into your existing folder.
 
-## Wiki
-The wiki is made using GitHub's wiki feature, you can go to the wiki tab or click [here](https://github.com/coop-deluxe/sm64coopdx/wiki).
+## Playing solo (offline)
 
-## Community
-We have an official Discord server open to the public [here](https://discord.gg/TJVKHS4).
+Just click **Play** on the main menu and you're straight into the game, on your own, fully offline, with
+no server screens. Underneath it's a normal Direct Connection host with the defaults, so co-op still
+works too: someone can join your IP, or use **Host** to set up a session with the usual options.
+
+## Controls
+
+You play with any of these:
+
+- Your VR controllers. Quest 3 / Quest 2 / Quest Pro Touch controllers, Index, HP Reverb G2,
+  Windows Mixed Reality and Vive wands all have layouts wired up, and other OpenXR controllers get
+  the runtime's own remapping on top of those. No gamepad needed. See the layout below.
+- Gamepad: DualSense (PS5), DualShock 4 (PS4), Xbox, Switch Pro, or any other SDL-compatible
+  controller, wired or over Bluetooth. It uses your existing coopdx control bindings.
+- Mouse and keyboard.
+
+In VR your head moves the view on top of whichever input you use.
+
+### VR controller layout
+
+The layout is fixed, so it works the same on every install regardless of how your gamepad is
+bound (gamepad rebinds in Options apply to gamepads, not to the VR controllers):
+
+| Control | Does |
+| --- | --- |
+| Left stick | Move |
+| Right stick | Camera (C buttons) |
+| A | Jump (A) |
+| B | Punch (B) |
+| Left trigger | Crouch / ground pound (Z) |
+| Right trigger | R |
+| Grips | Grab and throw objects (only when something is in reach) |
+| Menu button (left controller) | Pause (Start) |
+| Right stick click | Cycle the VR mode |
+| X / Y | X / Y |
+
+Menus work with it too: move the cursor with a stick, A to select, B to go back, and the triggers
+flip pages in the paginated menus. Rumble plays through the controllers. The Oculus button on the
+right controller belongs to the system and can't be bound.
+
+### VR menu
+
+All the VR settings are in-game. Pause and open the VR button, right after Cheats:
+
+![VR button in the pause menu](VR_Menu_Preview/image1.png)
+
+It has the VR mode, diorama distance, size and height, menu and HUD size, stereo depth, head motion,
+the first person toggles, Hide HUD, and camera anti-clip, plus a Reset to Default button:
+
+![VR settings panel](VR_Menu_Preview/image2.png)
+
+You can cycle the VR mode (Diorama / Third-person / First-person) with d-pad up or the F10 key, or
+pick it from the VR Mode dropdown in the menu. Each mode remembers the settings you give it, and
+everything in the menu is saved between launches.
+
+## Building from source
+
+Skip this if you just grabbed the release. To build it yourself:
+
+1. Set up MSYS2 and the normal sm64coopdx build environment (see the upstream repo at
+   https://github.com/coop-deluxe/sm64coopdx).
+2. Put your baserom.us.z64 in the project root.
+3. Run build_vr.bat. It pulls the one extra dependency (the OpenXR SDK) and compiles. You end up
+   with build\us_pc\sm64coopdx.exe.
+
+vr-support.patch is the whole VR change as one diff, if you'd rather apply it to a clean checkout
+and build that. The technical writeup is in VR_README.md.
+
+## Credits
+
+sm64coopdx by the Coop Deluxe Team. Super Mario 64 belongs to Nintendo, bring your own rom. VR work
+by RaYRoD.

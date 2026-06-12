@@ -53,6 +53,13 @@ static void djui_cursor_base_hover_location(struct DjuiBase* base, f32* x, f32* 
     base->get_cursor_hover_location(base, x, y);
 }
 
+// Hand the cursor back to controller/input control. Called when a menu opens so the gamepad works
+// immediately, even if the mouse owned the cursor beforehand (you open the pause menu with the
+// controller, but the mouse last moved it - the stick was being zeroed and the menu felt unresponsive).
+void djui_cursor_clear_mouse_control(void) {
+    sCursorMouseControlled = false;
+}
+
 void djui_cursor_input_controlled_center(struct DjuiBase* base) {
     if (!sCursorMouseControlled && (!base || (base && base->interactable && base->interactable->enabled))) {
         sInputControlledBase = base;
@@ -135,6 +142,14 @@ static void djui_cursor_update_position(void) {
         sCursorMouseControlled = false;
         sSavedMouseX = mouse_window_x;
         sSavedMouseY = mouse_window_y;
+    } else if (mouse_window_x <= -1000 || mouse_window_y <= -1000) {
+        // Mouse is outside the window, or the window lost focus (constant in VR, where the HMD
+        // compositor is foreground). Don't let this invalid position read as a big "mouse moved"
+        // jump that flips us into mouse-control and snaps the cursor to a window edge (the reported
+        // "cursor jumps to the right and sticks"). Keep the baseline current so the next genuine
+        // in-window move is measured from where the mouse actually re-enters.
+        sSavedMouseX = mouse_window_x;
+        sSavedMouseY = mouse_window_y;
     } else if (!sCursorMouseControlled || (sMouseCursor && !sMouseCursor->base.visible)) {
         f32 dist = sqrtf(powf(mouse_window_x - sSavedMouseX, 2) + powf(mouse_window_y - sSavedMouseY, 2));
         if (dist > 5) {
@@ -143,10 +158,24 @@ static void djui_cursor_update_position(void) {
         }
     }
 
+    // A deliberate controller-stick push reclaims the cursor from the mouse, so the gamepad always works
+    // in menus even when the mouse last owned the cursor (e.g. the mouse was used earlier, then you open
+    // the in-game menu with the controller). Without this the stick is zeroed below and can never take
+    // back control, so only the d-pad worked, intermittently. Threshold is above the resting-stick bias.
+    if (sCursorMouseControlled &&
+        (gInteractablePad.stick_x > 40 || gInteractablePad.stick_x < -40 ||
+         gInteractablePad.stick_y > 40 || gInteractablePad.stick_y < -40)) {
+        sCursorMouseControlled = false;
+    }
+
     // update mouse cursor
     if (sCursorMouseControlled) {
         gCursorX = mouse_window_x / djui_gfx_get_scale();
         gCursorY = mouse_window_y / djui_gfx_get_scale();
+        // The mouse owns the cursor this frame; don't let a resting controller stick (Quest 3 sticks
+        // carry ~0.2 bias) also drive menu navigation and fight the mouse.
+        gInteractablePad.stick_x = 0;
+        gInteractablePad.stick_y = 0;
     } else if (sInputControlledBase != NULL) {
         djui_cursor_base_hover_location(sInputControlledBase, &gCursorX, &gCursorY);
     }

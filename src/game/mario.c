@@ -44,6 +44,7 @@
 #include "pc/network/socket/socket.h"
 #include "bettercamera.h"
 #include "first_person_cam.h"
+#include "pc/vr/vr.h" // vr_is_active / vr_get_head_move / vr_get_look_yaw - move where you look (VR first-person)
 
 #define MAX_HANG_PREVENTION 64
 
@@ -1528,6 +1529,12 @@ void update_mario_joystick_inputs(struct MarioState *m) {
             m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + gLakituState.yaw;
         } else {
             m->intendedYaw = atan2s(-controller->stickY, controller->stickX) - gNewCamera.yaw + 0x4000;
+        }
+        // VR "Move Where You Look" (opt-in): add the head's yaw offset to whichever camera the move was made
+        // relative to, so you walk/turn toward where you're looking. Works in first AND third person; skipped
+        // in the diorama-orbit (Tabletop) and the flat Theater screen where head-aim wouldn't make sense.
+        if (vr_is_active() && vr_get_head_move() && !vr_is_tabletop_mode() && !vr_is_theater_mode()) {
+            m->intendedYaw += (s16) vr_get_look_yaw();
         }
         m->input |= INPUT_NONZERO_ANALOG;
     } else {

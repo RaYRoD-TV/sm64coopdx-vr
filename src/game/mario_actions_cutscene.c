@@ -11,6 +11,7 @@
 #include "engine/graph_node.h"
 #include "engine/math_util.h"
 #include "engine/surface_collision.h"
+#include "first_person_cam.h"
 #include "game_init.h"
 #include "gfx_dimensions.h"
 #include "ingame_menu.h"
@@ -834,10 +835,17 @@ Handles shared logic for Mario's various death states. Plays the specified death
 s32 common_death_handler(struct MarioState *m, s32 animation, s32 frameToDeathWarp) {
     if (!m) { return 0; }
     s32 animFrame = set_character_animation(m, animation);
-    if (animFrame == frameToDeathWarp) {
-        if (m->playerIndex != 0) {
-            // do nothing
+    // First person with FP Flip Cam: the view tips over with the death and the eye sinks to the floor,
+    // but the death warp used to fire the moment the animation ended - and its fade (which in VR also
+    // swaps the view to the flat panel) cut the cinematic off before it registered. Hold the warp for a
+    // couple of seconds so you get to lie there first. actionState latches the one-shot trigger (the
+    // stock == check could not re-fire either); none of the deaths that come through here use
+    // actionState or actionTimer themselves, and both reset on every action change.
+    if (m->playerIndex == 0 && animFrame >= frameToDeathWarp && m->actionState == 0) {
+        if (first_person_death_cinematic_active() && m->actionTimer++ < FIRST_PERSON_DEATH_HOLD_FRAMES) {
+            // lying there, tipped over - let the moment breathe before the fade
         } else {
+            m->actionState = 1;
             bool allowDeath = true;
             smlua_call_event_hooks(HOOK_ON_DEATH, m, &allowDeath);
             if (!allowDeath) { return animFrame; }

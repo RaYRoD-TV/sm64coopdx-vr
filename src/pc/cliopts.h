@@ -37,6 +37,8 @@ struct CLIOptions {
     int enabledModsCount;
     char** enableMods;
     bool headless;
+    bool vr;    // force VR on (skip headset auto-detect)
+    bool novr;  // force flatscreen (skip headset auto-detect)
 #if defined(_WIN32)
     int backend;
 #endif

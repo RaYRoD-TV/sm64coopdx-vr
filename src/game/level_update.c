@@ -186,6 +186,11 @@ struct CreditsEntry sCreditsSequence[] = {
 
 struct MarioState gMarioStates[MAX_PLAYERS] = { 0 };
 struct HudDisplay gHudDisplay;
+// VR: true while the act/course/star selector menu level is live. The act selector
+// runs INSIDE a loaded course area (gCurrLevelNum/gCurrCourseNum are already the
+// target course), so it is otherwise indistinguishable from gameplay - this flag is
+// the only reliable discriminator for the VR flat-panel predicate (see vr_frame_is_nongameplay).
+bool gVrInActSelector = false;
 s16 sCurrPlayMode;
 u16 D_80339ECA;
 s16 sTransitionTimer;
@@ -1790,6 +1795,11 @@ s32 init_level(void) {
     s32 val4 = 0;
 
     set_play_mode(PLAY_MODE_NORMAL);
+
+    // VR: every gameplay level entry routes through here - clear the act-selector flag
+    // defensively so it can never leak into a played level (e.g. a Lua HOOK_USE_ACT_SELECT
+    // that short-circuits the normal star_select_finish_selection path).
+    gVrInActSelector = false;
 
     sDelayedWarpOp = WARP_OP_NONE;
     sTransitionTimer = 0;
