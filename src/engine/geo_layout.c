@@ -3,6 +3,7 @@
 
 #include "geo_layout.h"
 #include "math_util.h"
+#include "game/camera.h"
 #include "game/memory.h"
 #include "graph_node.h"
 #include "geo_commands.h"
@@ -373,8 +374,16 @@ void geo_layout_cmd_node_camera(void) {
     cmdPos = read_vec3s_to_vec3f(pos, cmdPos);
     cmdPos = read_vec3s_to_vec3f(focus, cmdPos);
 
+    // A camera node with no function never gets its Camera allocated, leaving the
+    // camera mode int in the config union; level_cmd_begin_area then treats that
+    // int as the area's Camera pointer and the game crashes on the first level
+    // load. Some converted romhack mods ship such nodes, so fall back to the
+    // vanilla camera function instead.
+    GraphNodeFunc func = (GraphNodeFunc) cur_geo_cmd_ptr(0x10);
+    if (func == NULL) { func = (GraphNodeFunc) geo_camera_main; }
+
     graphNode = init_graph_node_camera(gGraphNodePool, NULL, pos, focus,
-                                       (GraphNodeFunc) cur_geo_cmd_ptr(0x10), cur_geo_cmd_s16(0x02));
+                                       func, cur_geo_cmd_s16(0x02));
 
     register_scene_graph_node(&graphNode->fnNode.node);
 

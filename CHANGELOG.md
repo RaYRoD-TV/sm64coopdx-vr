@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6 - 2026-06-12
 
 Multiplayer
 - Joining or leaving a lobby no longer breaks the First-person view mode. The
@@ -64,6 +64,23 @@ First person
   deflection. The old flat scale capped the top speed at about half of what
   the stick could ask for, which made the camera feel both slow and limited
   in range.
+
+Menus
+- Added a Quit Game button to the in-game pause menu. It quits straight to
+  desktop, so closing the game no longer means stopping the host (or
+  disconnecting) and then quitting again from the main menu. It asks to
+  confirm first, and sits under Stop Hosting / Disconnect.
+
+Converted romhacks
+- A converted romhack that ships a camera node with no function no longer
+  crashes on the first level load. The empty node used to leave a bad camera
+  pointer in the area; it now falls back to the vanilla camera.
+- Behavior and geo nodes whose original function could not be identified (the
+  converted data carries the name "NULL") are skipped quietly instead of
+  failing a lookup and logging on every call.
+- Loading a level pack now prints whether it took over a vanilla level script
+  or loaded as a custom level that replaces nothing, so it is obvious when a
+  romhack does not take over the campaign.
 
 ## v0.5 - 2026-06-10
 

@@ -1,4 +1,5 @@
 #include <ultra64.h>
+#include <string.h>
 
 #include "sm64.h"
 #include "behavior_data.h"
@@ -998,6 +999,14 @@ static s32 bhv_cmd_call_native_ext(void) {
     const char *funcStr = dynos_behavior_get_token(behavior, BHV_CMD_GET_U32(1));
     if (!funcStr) {
         LOG_LUA("Could not retrieve function name from behavior command.");
+        gCurBhvCommand += 2;
+        return BHV_PROC_CONTINUE;
+    }
+
+    // Converted romhack mods can reference behavior functions that could not be
+    // identified; the data carries the literal name "NULL". Skip those silently
+    // instead of failing a lua lookup and logging every call.
+    if (!strcmp(funcStr, "NULL")) {
         gCurBhvCommand += 2;
         return BHV_PROC_CONTINUE;
     }

@@ -1,4 +1,5 @@
 #include <PR/ultratypes.h>
+#include <string.h>
 
 #include "sm64.h"
 #include "area.h"
@@ -929,6 +930,11 @@ Gfx *geo_process_lua_function(s32 callContext, struct GraphNode *node, UNUSED Ma
         }
         return NULL;
     }
+
+    // Converted romhack mods can ship geo nodes whose original function could
+    // not be identified; the data carries the literal name "NULL". Treat those
+    // as no-op nodes instead of failing a lua lookup and logging every call.
+    if (!strcmp(funcStr, "NULL")) { return NULL; }
 
     // Retrieve function ref
     gSmLuaConvertSuccess = true;

@@ -29,13 +29,13 @@ index 12e547ad6..37173b39c 100644
  *.z64
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 new file mode 100644
-index 000000000..403733628
+index 000000000..9fa7e9e3b
 --- /dev/null
 +++ b/CHANGELOG.md
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,220 @@
 +# Changelog
 +
-+## Unreleased
++## v0.6 - 2026-06-12
 +
 +Multiplayer
 +- Joining or leaving a lobby no longer breaks the First-person view mode. The
@@ -99,6 +99,23 @@ index 000000000..403733628
 +  deflection. The old flat scale capped the top speed at about half of what
 +  the stick could ask for, which made the camera feel both slow and limited
 +  in range.
++
++Menus
++- Added a Quit Game button to the in-game pause menu. It quits straight to
++  desktop, so closing the game no longer means stopping the host (or
++  disconnecting) and then quitting again from the main menu. It asks to
++  confirm first, and sits under Stop Hosting / Disconnect.
++
++Converted romhacks
++- A converted romhack that ships a camera node with no function no longer
++  crashes on the first level load. The empty node used to leave a bad camera
++  pointer in the area; it now falls back to the vanilla camera.
++- Behavior and geo nodes whose original function could not be identified (the
++  converted data carries the name "NULL") are skipped quietly instead of
++  failing a lookup and logging on every call.
++- Loading a level pack now prints whether it took over a vanilla level script
++  or loaded as a custom level that replaces nothing, so it is obvious when a
++  romhack does not take over the campaign.
 +
 +## v0.5 - 2026-06-10
 +
@@ -555,12 +572,31 @@ index 000000000..76252681e
 +echo === Build complete: build\us_pc\sm64coopdx.exe ===
 +echo Run play_vr.bat to launch in VR.
 +pause
+diff --git a/data/dynos_mgr_lvl.cpp b/data/dynos_mgr_lvl.cpp
+index fbcc6eb82..a49cfe912 100644
+--- a/data/dynos_mgr_lvl.cpp
++++ b/data/dynos_mgr_lvl.cpp
+@@ -88,9 +88,14 @@ void DynOS_Lvl_Activate(s32 modIndex, const SysPath &aFilename, const char *aLev
+     auto& newScriptNode = newScripts[newScripts.Count() - 1];
+     const void* originalScript = DynOS_Builtin_ScriptPtr_GetFromName(newScriptNode->mName.begin());
+     if (originalScript == NULL) {
++        // Not a vanilla script name; the pack stays loadable as a custom level
++        // but replaces nothing. Loud enough to spot when a romhack mod fails
++        // to take over the campaign.
++        PrintInfo("Level '%s' does not match a vanilla script, no override", newScriptNode->mName.begin());
+         return;
+     }
+ 
++    PrintInfo("Level '%s' overrides the vanilla script", newScriptNode->mName.begin());
+     DynOS_Level_Override((void*)originalScript, newScriptNode->mData, modIndex);
+     _OverrideLevelScripts.push_back({ originalScript, newScriptNode->mData, _Node});
+ }
 diff --git a/make_vr_dist.bat b/make_vr_dist.bat
 new file mode 100644
-index 000000000..07f12a35d
+index 000000000..1f55b6359
 --- /dev/null
 +++ b/make_vr_dist.bat
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,86 @@
 +@echo off
 +title Package sm64coopdx VR (complete download)
 +REM ===========================================================================
@@ -626,9 +662,10 @@ index 000000000..07f12a35d
 +>>"%DIST%\READ_ME_FIRST.txt" echo into the game on your own, fully offline, with no server screens. (Host is
 +>>"%DIST%\READ_ME_FIRST.txt" echo still there if you want to set up a co-op session.)
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
-+>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
-+>>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
-+>>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
++>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with VR motion controllers, a gamepad (DualSense, DS4, Xbox)
++>>"%DIST%\READ_ME_FIRST.txt" echo or mouse and keyboard. Your head moves the view. In VR the left stick moves,
++>>"%DIST%\READ_ME_FIRST.txt" echo the right stick is the camera, A jumps, B punches, left trigger crouches,
++>>"%DIST%\READ_ME_FIRST.txt" echo the grips grab and throw, and the left menu button pauses.
 +>>"%DIST%\READ_ME_FIRST.txt" echo.
 +>>"%DIST%\READ_ME_FIRST.txt" echo VR settings are in-game: pause and open VR (right after Mod Menu). F10 cycles
 +>>"%DIST%\READ_ME_FIRST.txt" echo the view (diorama / third-person / first-person). See VR_README.md for the full guide.
@@ -679,6 +716,61 @@ index 000000000..d9b0d6c24
 +echo.
 +echo === Game exited. Scroll up to review any [VR] lines. ===
 +pause
+diff --git a/src/engine/behavior_script.c b/src/engine/behavior_script.c
+index 00daaecd0..362d188a7 100644
+--- a/src/engine/behavior_script.c
++++ b/src/engine/behavior_script.c
+@@ -1,4 +1,5 @@
+ #include <ultra64.h>
++#include <string.h>
+ 
+ #include "sm64.h"
+ #include "behavior_data.h"
+@@ -1002,6 +1003,14 @@ static s32 bhv_cmd_call_native_ext(void) {
+         return BHV_PROC_CONTINUE;
+     }
+ 
++    // Converted romhack mods can reference behavior functions that could not be
++    // identified; the data carries the literal name "NULL". Skip those silently
++    // instead of failing a lua lookup and logging every call.
++    if (!strcmp(funcStr, "NULL")) {
++        gCurBhvCommand += 2;
++        return BHV_PROC_CONTINUE;
++    }
++
+     gSmLuaConvertSuccess = true;
+     LuaFunction funcRef = smlua_get_function_mod_variable(modIndex, funcStr);
+     if (!gSmLuaConvertSuccess || funcRef == 0) {
+diff --git a/src/engine/geo_layout.c b/src/engine/geo_layout.c
+index 18e4ee047..08bc308ed 100644
+--- a/src/engine/geo_layout.c
++++ b/src/engine/geo_layout.c
+@@ -3,6 +3,7 @@
+ 
+ #include "geo_layout.h"
+ #include "math_util.h"
++#include "game/camera.h"
+ #include "game/memory.h"
+ #include "graph_node.h"
+ #include "geo_commands.h"
+@@ -373,8 +374,16 @@ void geo_layout_cmd_node_camera(void) {
+     cmdPos = read_vec3s_to_vec3f(pos, cmdPos);
+     cmdPos = read_vec3s_to_vec3f(focus, cmdPos);
+ 
++    // A camera node with no function never gets its Camera allocated, leaving the
++    // camera mode int in the config union; level_cmd_begin_area then treats that
++    // int as the area's Camera pointer and the game crashes on the first level
++    // load. Some converted romhack mods ship such nodes, so fall back to the
++    // vanilla camera function instead.
++    GraphNodeFunc func = (GraphNodeFunc) cur_geo_cmd_ptr(0x10);
++    if (func == NULL) { func = (GraphNodeFunc) geo_camera_main; }
++
+     graphNode = init_graph_node_camera(gGraphNodePool, NULL, pos, focus,
+-                                       (GraphNodeFunc) cur_geo_cmd_ptr(0x10), cur_geo_cmd_s16(0x02));
++                                       func, cur_geo_cmd_s16(0x02));
+ 
+     register_scene_graph_node(&graphNode->fnNode.node);
+ 
 diff --git a/src/game/area.c b/src/game/area.c
 index 003ec1643..9dd8bc29b 100644
 --- a/src/game/area.c
@@ -1873,6 +1965,28 @@ index 89e46a1eb..f5a24e0de 100644
              bool allowDeath = true;
              smlua_call_event_hooks(HOOK_ON_DEATH, m, &allowDeath);
              if (!allowDeath) { return animFrame; }
+diff --git a/src/game/mario_misc.c b/src/game/mario_misc.c
+index 18d427522..b3b0ad634 100644
+--- a/src/game/mario_misc.c
++++ b/src/game/mario_misc.c
+@@ -1,4 +1,5 @@
+ #include <PR/ultratypes.h>
++#include <string.h>
+ 
+ #include "sm64.h"
+ #include "area.h"
+@@ -930,6 +931,11 @@ Gfx *geo_process_lua_function(s32 callContext, struct GraphNode *node, UNUSED Ma
+         return NULL;
+     }
+ 
++    // Converted romhack mods can ship geo nodes whose original function could
++    // not be identified; the data carries the literal name "NULL". Treat those
++    // as no-op nodes instead of failing a lua lookup and logging every call.
++    if (!strcmp(funcStr, "NULL")) { return NULL; }
++
+     // Retrieve function ref
+     gSmLuaConvertSuccess = true;
+     LuaFunction funcRef = smlua_get_function_mod_variable(modIndex, funcStr);
 diff --git a/src/game/rendering_graph_node.c b/src/game/rendering_graph_node.c
 index 82d0da8f7..0f78c0449 100644
 --- a/src/game/rendering_graph_node.c
@@ -2774,7 +2888,7 @@ index 0a849bb51..7b9cdca7f 100644
              struct DjuiButton* button2 = djui_button_create(body, DLANG(MAIN, JOIN), DJUI_BUTTON_STYLE_NORMAL, djui_panel_join_create);
              if (!configExCoopTheme) { djui_base_set_location(&button2->base, 0, -30); }
 diff --git a/src/pc/djui/djui_panel_pause.c b/src/pc/djui/djui_panel_pause.c
-index 6a4c2ef9c..b772b918e 100644
+index 6a4c2ef9c..238157c25 100644
 --- a/src/pc/djui/djui_panel_pause.c
 +++ b/src/pc/djui/djui_panel_pause.c
 @@ -9,6 +9,7 @@
@@ -2785,7 +2899,29 @@ index 6a4c2ef9c..b772b918e 100644
  #include "pc/pc_main.h"
  #include "pc/network/network.h"
  #include "pc/lua/smlua_hooks.h"
-@@ -107,6 +108,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
+@@ -52,6 +53,21 @@ static void djui_panel_pause_quit(struct DjuiBase* caller) {
+     }
+ }
+ 
++// Quit straight to desktop without first stopping the host / disconnecting and dropping back to the
++// main menu. Saves the extra step that was awkward in VR.
++static void djui_panel_pause_quit_game_yes(UNUSED struct DjuiBase* caller) {
++    game_exit();
++}
++
++static void djui_panel_pause_quit_game(struct DjuiBase* caller) {
++    if (gMarioStates[0].action == ACT_PUSHING_DOOR || gMarioStates[0].action == ACT_PULLING_DOOR) { return; }
++
++    djui_panel_confirm_create(caller,
++                              "QUIT GAME",
++                              "Are you sure you want to quit to desktop?",
++                              djui_panel_pause_quit_game_yes);
++}
++
+ void djui_panel_pause_create(struct DjuiBase* caller) {
+     if (gDjuiPanelPauseCreated) { return; }
+     if (gDjuiChatBoxFocus) { djui_chat_box_toggle(); }
+@@ -107,6 +123,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
              djui_button_create(body, DLANG(PAUSE, MOD_MENU), DJUI_BUTTON_STYLE_NORMAL, djui_panel_mod_menu_create);
          }
  
@@ -2795,6 +2931,16 @@ index 6a4c2ef9c..b772b918e 100644
          djui_button_create(body, DLANG(PAUSE, RESUME), DJUI_BUTTON_STYLE_NORMAL, djui_panel_pause_resume);
  
          if (gNetworkType == NT_SERVER) {
+@@ -114,6 +133,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
+         } else {
+             djui_button_create(body, DLANG(PAUSE, DISCONNECT), DJUI_BUTTON_STYLE_BACK, djui_panel_pause_quit);
+         }
++
++        // Quit to desktop in one step instead of stopping the host first and quitting from the main menu.
++        djui_button_create(body, "Quit Game", DJUI_BUTTON_STYLE_BACK, djui_panel_pause_quit_game);
+     }
+ 
+     djui_panel_add(caller, panel, defaultBase);
 diff --git a/src/pc/djui/djui_panel_vr.c b/src/pc/djui/djui_panel_vr.c
 new file mode 100644
 index 000000000..e0a8d8b43

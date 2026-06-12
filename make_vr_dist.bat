@@ -63,9 +63,10 @@ echo Writing READ_ME_FIRST.txt ...
 >>"%DIST%\READ_ME_FIRST.txt" echo into the game on your own, fully offline, with no server screens. (Host is
 >>"%DIST%\READ_ME_FIRST.txt" echo still there if you want to set up a co-op session.)
 >>"%DIST%\READ_ME_FIRST.txt" echo.
->>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with a gamepad (DualSense, DS4, Xbox) or mouse and keyboard,
->>"%DIST%\READ_ME_FIRST.txt" echo same as normal coopdx. Your head moves the view. VR motion controllers are
->>"%DIST%\READ_ME_FIRST.txt" echo not hooked up yet.
+>>"%DIST%\READ_ME_FIRST.txt" echo Controls: play with VR motion controllers, a gamepad (DualSense, DS4, Xbox)
+>>"%DIST%\READ_ME_FIRST.txt" echo or mouse and keyboard. Your head moves the view. In VR the left stick moves,
+>>"%DIST%\READ_ME_FIRST.txt" echo the right stick is the camera, A jumps, B punches, left trigger crouches,
+>>"%DIST%\READ_ME_FIRST.txt" echo the grips grab and throw, and the left menu button pauses.
 >>"%DIST%\READ_ME_FIRST.txt" echo.
 >>"%DIST%\READ_ME_FIRST.txt" echo VR settings are in-game: pause and open VR (right after Mod Menu). F10 cycles
 >>"%DIST%\READ_ME_FIRST.txt" echo the view (diorama / third-person / first-person). See VR_README.md for the full guide.

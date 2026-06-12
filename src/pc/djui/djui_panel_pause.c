@@ -53,6 +53,21 @@ static void djui_panel_pause_quit(struct DjuiBase* caller) {
     }
 }
 
+// Quit straight to desktop without first stopping the host / disconnecting and dropping back to the
+// main menu. Saves the extra step that was awkward in VR.
+static void djui_panel_pause_quit_game_yes(UNUSED struct DjuiBase* caller) {
+    game_exit();
+}
+
+static void djui_panel_pause_quit_game(struct DjuiBase* caller) {
+    if (gMarioStates[0].action == ACT_PUSHING_DOOR || gMarioStates[0].action == ACT_PULLING_DOOR) { return; }
+
+    djui_panel_confirm_create(caller,
+                              "QUIT GAME",
+                              "Are you sure you want to quit to desktop?",
+                              djui_panel_pause_quit_game_yes);
+}
+
 void djui_panel_pause_create(struct DjuiBase* caller) {
     if (gDjuiPanelPauseCreated) { return; }
     if (gDjuiChatBoxFocus) { djui_chat_box_toggle(); }
@@ -118,6 +133,9 @@ void djui_panel_pause_create(struct DjuiBase* caller) {
         } else {
             djui_button_create(body, DLANG(PAUSE, DISCONNECT), DJUI_BUTTON_STYLE_BACK, djui_panel_pause_quit);
         }
+
+        // Quit to desktop in one step instead of stopping the host first and quitting from the main menu.
+        djui_button_create(body, "Quit Game", DJUI_BUTTON_STYLE_BACK, djui_panel_pause_quit_game);
     }
 
     djui_panel_add(caller, panel, defaultBase);
